@@ -1,0 +1,83 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Outfit", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Fraunces", ui-serif, Georgia, serif;
+
+  --color-ink: #101618;
+  --color-rise: #172226;
+  --color-panel: #1b272c;
+  --color-panel-2: #223137;
+  --color-line: #33454c;
+  --color-fg: #e8f0f2;
+  --color-muted: #93a4ab;
+  --color-faint: #6d8088;
+
+  --color-ok: #3cba8a;
+  --color-ok-soft: #17362c;
+  --color-ok-ink: #d7f6e8;
+  --color-watch: #e0ad55;
+  --color-watch-soft: #3a2e18;
+  --color-watch-ink: #fbe8c4;
+  --color-bad: #e06b64;
+  --color-bad-soft: #3c2222;
+  --color-bad-ink: #fad9d6;
+
+  --radius-card: 1.15rem;
+}
+
+html[data-theme="lite"] {
+  --color-ink: #f3f6f7;
+  --color-rise: #e6eeef;
+  --color-panel: #ffffff;
+  --color-panel-2: #f7fafa;
+  --color-line: #d3dee2;
+  --color-fg: #132024;
+  --color-muted: #3f565e;
+  --color-faint: #5c727a;
+  --color-ok: #0b7a4e;
+  --color-watch: #8a5b00;
+  --color-bad: #b42318;
+  color-scheme: light;
+}
+
+html[data-theme="dark"] {
+  color-scheme: dark;
+}
+
+@layer base {
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
+
+  html {
+    color-scheme: dark;
+  }
+
+  html,
+  body {
+    background-color: var(--color-ink);
+    color: var(--color-fg);
+    font-family: var(--font-sans);
+    min-height: 100%;
+  }
+
+  body {
+    background-image: linear-gradient(
+      180deg,
+      var(--color-rise) 0%,
+      var(--color-ink) 22rem
+    );
+    background-attachment: fixed;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation: none !important;
+      transition: none !important;
+    }
+  }
+}
