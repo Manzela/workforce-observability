@@ -1,4 +1,4 @@
-import { LOG, PIPELINE_STEPS, type LogRow, type Status } from "@/data/log";
+import { LOG, PIPELINE_STEPS, type LogRow, type Status } from "../data/log.ts";
 
 export function publicText(text: string): string {
   return text
@@ -7,8 +7,13 @@ export function publicText(text: string): string {
     .replace(/\S+/g, (chunk) => (chunk.replace(/\D/g, "").length >= 10 ? "[withheld]" : chunk));
 }
 
+function isStop(cascade: string): boolean {
+  const value = cascade.trim().toLowerCase();
+  return value !== "" && value !== "none" && value !== "n/a";
+}
+
 export function rowStatus(row: LogRow): Status {
-  const stopped = row.cascade !== "none" && row.cascade !== "";
+  const stopped = isStop(row.cascade);
   const failed = /fail|mismatch/i.test(row.reverify);
   if (!row.schemaComplete || stopped || failed) return "wrong";
   const flagged = /flag/i.test(row.critic);
@@ -23,7 +28,7 @@ export function reason(row: LogRow): string | null {
     return publicText(flag.charAt(0).toUpperCase() + flag.slice(1));
   }
   if (/fail|mismatch/i.test(row.reverify)) return "A re-check did not match.";
-  if (row.cascade !== "none" && row.cascade !== "") return "This handoff was stopped.";
+  if (isStop(row.cascade)) return "This handoff was stopped.";
   if (row.human) return "A person was asked.";
   if (!row.schemaComplete) return "The record was incomplete.";
   if (row.confidence === null) return "Confidence is missing.";
@@ -45,7 +50,7 @@ function whatHappened(row: LogRow): string {
     return "The latest row is complete.";
   }
   if (!row.schemaComplete) return "The latest row is incomplete, so this step isn't done.";
-  if (row.cascade !== "none" && row.cascade !== "") return "The latest row was stopped.";
+  if (isStop(row.cascade)) return "The latest row was stopped.";
   if (/fail|mismatch/i.test(row.reverify)) return "The latest row failed its re-check.";
   if (/flag/i.test(row.critic)) {
     const flag = row.critic
@@ -61,13 +66,22 @@ function whatHappened(row: LogRow): string {
   return "The latest row needs a look.";
 }
 
-export function stepTip(step: (typeof PIPELINE_STEPS)[number], rows: LogRow[]) {
+type StepDef = { id: string; label: string; job: string };
+
+function sourceText(row: LogRow): string | null {
+  const text = publicText(row.sources).trim();
+  return text || null;
+}
+
+export function stepTip(step: StepDef, rows: LogRow[]) {
   const mine = rows.filter((row) => row.step === step.id);
   if (mine.length === 0) return `${step.job} Nothing is logged here yet.`;
   const latest = latestRow(mine);
   const earlier = mine.some((row) => row.id !== latest.id && rank(rowStatus(row)) > rank(rowStatus(latest)));
   const tail = earlier ? " An earlier try in this step was worse." : "";
-  return publicText(`${step.job} ${whatHappened(latest)}${tail}`);
+  const sources = sourceText(latest);
+  const sourceLine = sources ? ` Sources: ${sources}.` : "";
+  return `${publicText(`${step.job} ${whatHappened(latest)}${tail}`)}${sourceLine}`;
 }
 
 function rowMs(row: LogRow): number {
@@ -85,35 +99,53 @@ function rank(status: Status): number {
   return 0;
 }
 
-export function stepCoverage(rows: LogRow[]) {
-  return PIPELINE_STEPS.map((step) => {
-    const mine = rows.filter((row) => row.step === step.id);
-    if (mine.length === 0) {
-      return {
-        id: step.id,
-        label: step.label,
-        status: null,
-        reason: null,
-        traceIds: [] as string[],
-        tip: stepTip(step, rows),
-      };
-    }
-    const latest = latestRow(mine);
-    const status = rowStatus(latest);
-    const earlier = mine.filter((row) => row.id !== latest.id && rank(rowStatus(row)) > rank(status));
-    const current = reason(latest);
-    const reasonText = earlier.length
-      ? [current, "An earlier try in this step was worse."].filter(Boolean).join(" ")
-      : current;
+function cover(step: StepDef, rows: LogRow[]) {
+  const mine = rows.filter((row) => row.step === step.id);
+  if (mine.length === 0) {
     return {
       id: step.id,
       label: step.label,
-      status,
-      reason: reasonText,
-      traceIds: [latest.id, ...earlier.map((row) => row.id)],
+      status: null as Status | null,
+      reason: null as string | null,
+      sources: null as string | null,
+      traceIds: [] as string[],
       tip: stepTip(step, rows),
     };
-  });
+  }
+  const latest = latestRow(mine);
+  const status = rowStatus(latest);
+  const earlier = mine.filter((row) => row.id !== latest.id && rank(rowStatus(row)) > rank(status));
+  const current = reason(latest);
+  const reasonText = earlier.length
+    ? [current, "An earlier try in this step was worse."].filter(Boolean).join(" ")
+    : current;
+  return {
+    id: step.id,
+    label: step.label,
+    status,
+    reason: reasonText,
+    sources: sourceText(latest),
+    traceIds: [latest.id, ...earlier.map((row) => row.id)],
+    tip: stepTip(step, rows),
+  };
+}
+
+export function stepCoverage(rows: LogRow[]) {
+  const known = new Set(PIPELINE_STEPS.map((step) => step.id));
+  const unknown = [...new Set(rows.map((row) => row.step).filter((step) => step && !known.has(step)))].sort();
+  return [
+    ...PIPELINE_STEPS.map((step) => cover(step, rows)),
+    ...unknown.map((id) =>
+      cover(
+        {
+          id,
+          label: `Other · ${id}`,
+          job: "This name is outside the pipeline list, so it stays under Other and does not move the progress bar.",
+        },
+        rows,
+      ),
+    ),
+  ];
 }
 
 export function counties(rows: LogRow[]): string[] {

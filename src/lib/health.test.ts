@@ -18,6 +18,15 @@ test("health counts the sheet copy without inventing a county or a token budget"
   assert.equal(TARGETS.schema, 0.9);
 });
 
+test("a blank token estimate stays blank and an unknown step is Other", () => {
+  const health = computeHealth([{ ...LOG[0], id: "z", step: "gsccca_lookup", tokenEst: null, county: "BARTOW-GA" }]);
+  const step = health.steps.find((item) => item.step === "gsccca_lookup");
+  assert.ok(step);
+  assert.equal(step.phase, "Other");
+  assert.equal(step.avgTokens, null);
+  assert.equal(health.avgTokens, null);
+});
+
 test("an empty filter stays empty", () => {
   const health = computeHealth([]);
   assert.equal(health.eventCount, 0);

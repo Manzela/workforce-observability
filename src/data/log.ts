@@ -48,6 +48,7 @@ export const SHEET_COLUMNS = [
   "re_verify_result",
   "content_hash",
   "county_code",
+  "run_id",
 ] as const;
 
 /** Named by the metric and absent from that sheet header. */

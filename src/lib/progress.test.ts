@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
-import { rowsFromSheetText, rowRunLabel, runProgress, runStarts } from "./parse-sheet.ts";
+import { stepCoverage } from "./evaluate.ts";
+import { liveFeed, rowsFromSheetText, rowRunLabel, runProgress, runStarts } from "./parse-sheet.ts";
 
 const csv = readFileSync(new URL("../data/sheet-fallback.csv", import.meta.url), "utf8");
 
@@ -76,6 +77,46 @@ test("a county run keeps the first timestamp and its county", () => {
   const smoke = rows.find((row) => row.handoffId.startsWith("dm-smoke"));
   assert.ok(smoke);
   assert.equal(rowRunLabel(rows, smoke), "2 Nov, 14:53");
+});
+
+test("unknown steps stay under Other and do not move the Clayton bar", () => {
+  const rows = rowsFromSheetText(csv);
+  const extra = {
+    ...rows[0],
+    id: "incident-row",
+    handoffId: "clayton-rerun-incident-2026-11-02",
+    step: "incident",
+    county: "CLAYTON-GA",
+    iso: "2026-11-04T09:10:00+02:00",
+    sources: "incident-log",
+    notes: "A later incident.",
+  };
+  const run = runProgress([...rows, extra]);
+  assert.equal(run?.nowLabel, "Property harvest");
+  const other = stepCoverage([...rows, extra]).find((step) => step.id === "incident");
+  assert.ok(other);
+  assert.equal(other.label, "Other · incident");
+  assert.equal(other.sources, "incident-log");
+  assert.match(other.tip, /Sources: incident-log/);
+  assert.match(other.tip, /does not move the progress bar/);
+});
+
+test("smoke rows drop out of a live feed and remain when they are the only rows", () => {
+  const rows = rowsFromSheetText(
+    "timestamp,handoff_id,from_bot,step_type,schema_complete,confidence,county_code,sources_refs,cascade_flags,critic_result\n" +
+      "2026-11-02T13:13:31+02:00,smoke-test-2026-11-02,Envoy,smoke_test,TRUE,1,,t412u,n/a,pass\n" +
+      "2026-11-02T13:13:43+02:00,probe-2026-11-02,Envoy,intake_request,TRUE,1,TEST,probe,none,pass\n" +
+      "2026-11-02T15:59:00+02:00,clayton-rerun-intake-2026-11-02,Envoy,intake_request,TRUE,0.9,CLAYTON-GA,county-file,none,pass\n",
+  );
+  const mixed = liveFeed(rows);
+  assert.equal(mixed.live, true);
+  assert.deepEqual(mixed.rows.map((row) => row.handoffId), ["clayton-rerun-intake-2026-11-02"]);
+  const smokeOnly = liveFeed(rows.slice(0, 2));
+  assert.equal(smokeOnly.live, false);
+  assert.equal(smokeOnly.rows.length, 2);
+  const intake = stepCoverage(mixed.rows).find((step) => step.id === "intake_request");
+  assert.equal(intake?.sources, "county-file");
+  assert.equal(intake?.status, "clear");
 });
 
 test("street view list prep is the Street View stage", () => {

@@ -49,11 +49,15 @@ export function Dashboard() {
     try {
       const next = await pullLiveLog();
       if (!alive.current) return;
-      if (next.live && next.rows.length > 0) {
+      if (next.rows.length > 0) {
         setRowsAll(next.rows);
-        setLive(true);
+        setLive(next.live);
         setReadAt(next.readAt ? displayTime(next.readAt) : "just now");
-        setFeedNote("Live sheet. Refreshes every 15 seconds.");
+        setFeedNote(
+          next.live
+            ? "Live sheet. Refreshes every 15 seconds."
+            : "Not live. The sheet has no production rows.",
+        );
         return;
       }
       setLive(false);
@@ -218,9 +222,10 @@ export function Dashboard() {
                   {step.status ? STATUS_WORD[step.status] : "Not logged"}
                 </span>
               </button>
-              {(step.reason || step.traceIds.length > 0) && (
+              {(step.reason || step.sources || step.traceIds.length > 0) && (
                 <div className="px-4 pb-3 pl-9">
                   {step.reason && <p className="text-sm leading-relaxed text-muted">{step.reason}</p>}
+                  {step.sources && <p className="mt-1 text-sm leading-relaxed text-muted">Sources: {step.sources}</p>}
                   <p className="mt-1 flex flex-wrap gap-x-3 gap-y-1">
                     {step.traceIds.map((id, index) => (
                       <button
@@ -427,7 +432,7 @@ function HealthView({ health }: { health: Health }) {
                     <td className="px-3 py-2 text-muted">{step.phase}</td>
                     <td className="px-3 py-2">{step.executions}</td>
                     <td className={`px-3 py-2 ${rateTone(step.passRate, TARGETS.schema)}`}>{pct(step.passRate)}</td>
-                    <td className="px-3 py-2">{step.avgTokens}</td>
+                    <td className="px-3 py-2">{step.avgTokens == null ? "—" : step.avgTokens}</td>
                     <td className="px-3 py-2">{step.flags}</td>
                   </tr>
                 ))}

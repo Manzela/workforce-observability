@@ -178,6 +178,17 @@ function isCountyWork(row: LogRow): boolean {
   return id.includes(slug) || countyFromRunId(row.loggedRunId ?? "") === row.county;
 }
 
+function isSmokeRow(row: LogRow): boolean {
+  return row.step === "smoke_test" || row.county === "TEST";
+}
+
+/** Drop smoke tests when real rows exist. A smoke-only sheet stays visible and is not live. */
+export function liveFeed(rows: LogRow[]): { live: boolean; rows: LogRow[] } {
+  const production = rows.filter((row) => !isSmokeRow(row));
+  if (production.length === 0) return { live: false, rows };
+  return { live: true, rows: production };
+}
+
 function carryCounty(rows: LogRow[]): LogRow[] {
   const byRun = new Map<string, string>();
   for (const row of rows) {

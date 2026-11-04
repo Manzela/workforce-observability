@@ -1,5 +1,5 @@
 import { createServerFn } from "@tanstack/react-start";
-import { rowsFromSheetText } from "@/lib/parse-sheet.ts";
+import { liveFeed, rowsFromSheetText } from "@/lib/parse-sheet.ts";
 import type { LogRow } from "@/data/log.ts";
 
 const SHEET_ID = "1v29s_KuYX-eNUnmFSjuZK_sWE2mqAPq7_FIiYjLUCS4";
@@ -24,7 +24,7 @@ function sheetText(data: unknown): string {
 }
 
 async function publicLogCsv(): Promise<string | null> {
-  const response = await fetch(PUBLIC_CSV, { headers: { "cache-control": "no-cache" } });
+  const response = await fetch(PUBLIC_CSV, { cache: "no-store", headers: { "cache-control": "no-cache" } });
   if (!response.ok) return null;
   const text = await response.text();
   if (!text.includes("handoff_id") || !text.includes("timestamp")) return null;
@@ -32,11 +32,17 @@ async function publicLogCsv(): Promise<string | null> {
 }
 
 function pack(rows: LogRow[]): LiveLog {
-  const production = rows.filter((row) => row.step !== "smoke_test" && row.county !== "TEST");
-  if (production.length === 0) {
-    return { live: false, pending: false, error: "No production rows in the sheet", readAt: null, rows: [] };
+  const feed = liveFeed(rows);
+  if (feed.rows.length === 0) {
+    return { live: false, pending: false, error: "Sheet came back empty", readAt: null, rows: [] };
   }
-  return { live: true, pending: false, error: null, readAt: new Date().toISOString(), rows };
+  return {
+    live: feed.live,
+    pending: false,
+    error: null,
+    readAt: new Date().toISOString(),
+    rows: feed.rows,
+  };
 }
 
 export const pullLiveLog = createServerFn({ method: "POST" }).handler(async (): Promise<LiveLog> => {
