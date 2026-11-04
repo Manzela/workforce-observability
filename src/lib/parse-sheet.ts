@@ -53,6 +53,14 @@ function bool(value: string): boolean {
   return value.trim().toUpperCase() === "TRUE";
 }
 
+/** Blank stays unknown. Only an exact FALSE is a no. */
+function boolFalse(value: string): boolean | null {
+  const text = value.trim().toUpperCase();
+  if (text === "TRUE") return true;
+  if (text === "FALSE") return false;
+  return null;
+}
+
 /** Sheet step names that are the same stage under another id. */
 const STEP_ALIAS: Record<string, string> = {
   street_view_list_prep: "sv_classify",
@@ -118,6 +126,7 @@ export function rowsFromSheetText(text: string): LogRow[] {
         from,
         to: cell(row, "to_bot"),
         step: canonicalStep(cell(row, "step_type")),
+        sheetStep: cell(row, "step_type"),
         county: cell(row, "county_code"),
         schemaComplete: bool(cell(row, "schema_complete")),
         confidence: num(cell(row, "confidence")),
@@ -125,7 +134,7 @@ export function rowsFromSheetText(text: string): LogRow[] {
         critic: cell(row, "critic_result"),
         hash: cell(row, "constraint_hash"),
         contentHash: cell(row, "content_hash"),
-        human: bool(cell(row, "human_intervention")),
+        human: boolFalse(cell(row, "human_intervention")),
         reverify: cell(row, "re_verify_result"),
         notes: cell(row, "outcome_notes"),
         sources: cell(row, "sources_refs"),
@@ -143,6 +152,7 @@ export function rowsFromSheetText(text: string): LogRow[] {
 export type RunStageState = "waiting" | "done" | "now";
 
 export type RunProgress = {
+  title: string;
   county: string;
   done: number;
   total: number;
@@ -176,6 +186,17 @@ function isCountyWork(row: LogRow): boolean {
   const slug = row.county.split("-")[0].toLowerCase();
   const id = row.handoffId.toLowerCase();
   return id.includes(slug) || countyFromRunId(row.loggedRunId ?? "") === row.county;
+}
+
+function isSmokeRow(row: LogRow): boolean {
+  return row.step === "smoke_test" || row.county === "TEST";
+}
+
+/** Drop smoke tests when real rows exist. A smoke-only sheet stays visible and is not live. */
+export function liveFeed(rows: LogRow[]): { live: boolean; rows: LogRow[] } {
+  const production = rows.filter((row) => !isSmokeRow(row));
+  if (production.length === 0) return { live: false, rows };
+  return { live: true, rows: production };
 }
 
 function carryCounty(rows: LogRow[]): LogRow[] {
@@ -231,14 +252,36 @@ export function runStarts(rows: LogRow[]): RunStart[] {
   }));
 }
 
+/** Runs that belong to the selected county. `all` keeps every run. */
+export function runsForCounty(rows: LogRow[], county: string): RunStart[] {
+  const scoped = county === "all" ? rows : rows.filter((row) => row.county === county);
+  return runStarts(scoped);
+}
+
+/**
+ * Keep an explicit time only when that run is in the current list.
+ * Otherwise use the preferred run (the Clayton re-run on All counties),
+ * then the newest run in the list.
+ */
+export function activeRunId(starts: RunStart[], time: string, preferId: string | null): string {
+  if (time === "all") return "all";
+  if (starts.some((start) => start.id === time)) return time;
+  if (preferId && starts.some((start) => start.id === preferId)) return preferId;
+  return starts.at(-1)?.id ?? "all";
+}
+
 export function rowRunLabel(rows: LogRow[], row: LogRow): string {
   const id = runId(rows, row);
   return runStarts(rows).find((start) => start.id === id)?.label ?? row.time;
 }
 
-export function runProgress(rows: LogRow[]): RunProgress | null {
-  const run = rows.filter(isActiveRun);
-  if (run.length === 0) return null;
+function placeName(code: string): string {
+  const head = code.split("-")[0] ?? code;
+  if (!head) return "Run";
+  return head.charAt(0).toUpperCase() + head.slice(1).toLowerCase();
+}
+
+function buildProgress(run: LogRow[], title: string, county: string): RunProgress {
   const labels = new Map(PIPELINE_STEPS.map((step) => [step.id, step.label]));
   const logged = new Set(run.map((row) => row.step));
   const work = run.filter((row) => (RUN_STAGES as readonly string[]).includes(row.step));
@@ -251,11 +294,23 @@ export function runProgress(rows: LogRow[]): RunProgress | null {
   });
   const noteSource = latest?.notes?.trim() || latestWork?.notes?.trim() || "Logged. Waiting on the next step.";
   return {
-    county: "Clayton",
+    title,
+    county,
     done: stages.filter((stage) => stage.state !== "waiting").length,
     total: stages.length,
     nowLabel: labels.get(nowId) ?? nowId,
     nowNote: scrubNote(noteSource),
     stages,
   };
+}
+
+export function runProgress(rows: LogRow[]): RunProgress | null {
+  const clayton = rows.filter(isActiveRun);
+  if (clayton.length > 0) return buildProgress(clayton, "Clayton re-run", "Clayton");
+  const codes = [...new Set(rows.map((row) => row.county).filter(Boolean))];
+  if (codes.length !== 1) return null;
+  const hasWork = rows.some((row) => (RUN_STAGES as readonly string[]).includes(row.step));
+  if (!hasWork) return null;
+  const name = placeName(codes[0]);
+  return buildProgress(rows, `${name} run`, name);
 }

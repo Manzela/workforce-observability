@@ -14,7 +14,8 @@ export type LogRow = {
   critic: string;
   hash: string;
   contentHash: string;
-  human: boolean;
+  /** TRUE, FALSE, or null when the cell is blank. A blank is not a no. */
+  human: boolean | null;
   reverify: string;
   notes: string;
   sources: string;
@@ -22,6 +23,8 @@ export type LogRow = {
   tokenEst: number | null;
   latencyMs: number | null;
   /** Original sheet timestamp. Used to order a live run. Absent on the old 7-row fixture. */
+  /** Sheet step_type before aliases. Health counts use this. */
+  sheetStep?: string;
   iso?: string;
   /** Sheet run_id. Empty on older rows; the run is then inferred. */
   loggedRunId?: string;
@@ -48,6 +51,7 @@ export const SHEET_COLUMNS = [
   "re_verify_result",
   "content_hash",
   "county_code",
+  "run_id",
 ] as const;
 
 /** Named by the metric and absent from that sheet header. */

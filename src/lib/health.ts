@@ -15,7 +15,7 @@ export type StepStat = {
   phase: string;
   executions: number;
   passRate: number;
-  avgTokens: number;
+  avgTokens: number | null;
   flags: number;
 };
 
@@ -162,7 +162,7 @@ export function computeHealth(rows: LogRow[]): Health {
         phase: PHASE[step] ?? "Other",
         executions: bucket.length,
         passRate: ratio(passes, bucket.length),
-        avgTokens: tokenMean == null ? 0 : Math.round(tokenMean),
+        avgTokens: tokenMean == null ? null : Math.round(tokenMean),
         flags,
       };
     })
