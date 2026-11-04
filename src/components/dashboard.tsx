@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Moon, Sun } from "lucide-react";
+import { Bug, Moon, Sun } from "lucide-react";
 import { counties, stepCoverage } from "@/lib/evaluate";
-import { metricBoard } from "@/lib/metrics";
-import { computeHealth, TARGETS, type Health } from "@/lib/health";
 import { attention, countyWatch, feedFailureNote, feedWord, latestEvent, stageMark, type CountyWatch } from "@/lib/control";
+import { explainStep } from "@/lib/plain";
 import { activeRunId, displayTime, runId, runProgress, runsForCounty, type RunProgress } from "@/lib/parse-sheet";
 import { pullLiveLog } from "@/lib/live-log";
+import { sheetHealth, type SheetHealth, type SpanRow } from "@/lib/sheet-health";
 import { FALLBACK_READ_AT, FALLBACK_ROWS } from "@/data/fallback";
 import type { LogRow, Status } from "@/data/log";
 
@@ -36,33 +36,32 @@ export function Dashboard() {
   const [time, setTime] = useState("latest");
   const [tab, setTab] = useState<"steps" | "metrics">("steps");
   const [copied, setCopied] = useState<string | null>(null);
-  const [open, setOpen] = useState<string | null>(null);
-  const [pinned, setPinned] = useState<string | null>(null);
+  const [debugOpen, setDebugOpen] = useState<string | null>(null);
   const [rowsAll, setRowsAll] = useState<LogRow[]>(FALLBACK_ROWS);
+  const [counted, setCounted] = useState<LogRow[]>(FALLBACK_ROWS);
+  const [spans, setSpans] = useState<SpanRow[]>([]);
+  const [spansOk, setSpansOk] = useState(false);
   const [live, setLive] = useState(false);
   const [readAt, setReadAt] = useState(FALLBACK_READ_AT);
   const [feedNote, setFeedNote] = useState("Sheet copy.");
   const [stale, setStale] = useState(false);
-  const [refreshing, setRefreshing] = useState(false);
   const alive = useRef(true);
   const heldLive = useRef(false);
 
-  const pull = useCallback(async (manual: boolean) => {
-    if (manual) setRefreshing(true);
+  const pull = useCallback(async () => {
     try {
       const next = await pullLiveLog();
       if (!alive.current) return;
       if (next.rows.length > 0) {
         setRowsAll(next.rows);
+        setCounted(next.counted.length > 0 ? next.counted : next.rows);
+        setSpans(next.spans);
+        setSpansOk(next.spansOk);
         setLive(next.live);
         setStale(false);
         if (next.live) heldLive.current = true;
         setReadAt(next.readAt ? displayTime(next.readAt) : "just now");
-        setFeedNote(
-          next.live
-            ? "Live sheet. Refreshes every 15 seconds."
-            : "Not live. The sheet has no production rows.",
-        );
+        setFeedNote(next.live ? "" : "The sheet has no production rows.");
         return;
       }
       setLive(false);
@@ -73,16 +72,14 @@ export function Dashboard() {
       setLive(false);
       setStale(heldLive.current);
       setFeedNote(feedFailureNote(heldLive.current));
-    } finally {
-      if (manual && alive.current) setRefreshing(false);
     }
   }, []);
 
   useEffect(() => {
     alive.current = true;
-    void pull(false);
+    void pull();
     const timer = window.setInterval(() => {
-      void pull(false);
+      void pull();
     }, 15000);
     return () => {
       alive.current = false;
@@ -110,24 +107,29 @@ export function Dashboard() {
   }, [rowsAll, county, timeActive]);
 
   const steps = stepCoverage(rows);
-  const board = useMemo(() => attention(rows), [rows]);
+  const progressRows = useMemo(() => {
+    if (county === "all" || county === "CLAYTON-GA") {
+      return rowsAll.filter((row) => timeActive === "all" || runId(rowsAll, row) === timeActive);
+    }
+    return rows;
+  }, [county, rows, rowsAll, timeActive]);
+  const progress = useMemo(() => runProgress(progressRows), [progressRows]);
+  const barRows = useMemo(() => {
+    if (progress?.title !== "Clayton re-run") return progressRows;
+    const clayton = progressRows.filter(
+      (row) => row.county === "CLAYTON-GA" && /clayton-(rerun|e2e)/i.test(row.handoffId),
+    );
+    return clayton.length > 0 ? clayton : progressRows;
+  }, [progress, progressRows]);
+  const barSteps = useMemo(() => stepCoverage(barRows), [barRows]);
+  const nowId = progress?.stages.find((stage) => stage.state === "now")?.id ?? null;
+  const nowForList = timeActive === "all" && county === "all" ? null : nowId;
+  const board = useMemo(() => attention(rows, nowForList), [rows, nowForList]);
   const watch = useMemo(() => countyWatch(rowsAll), [rowsAll]);
   const latest = useMemo(() => latestEvent(rowsAll), [rowsAll]);
   const latestInView = latest ? rows.some((row) => row.id === latest.traceId) : true;
-  const metrics = useMemo(() => metricBoard(rows, null), [rows]);
-  const health = useMemo(() => computeHealth(rows), [rows]);
-  const progress = useMemo(
-    () =>
-      runProgress(
-        county === "all" || county === "CLAYTON-GA"
-          ? rowsAll.filter((row) => timeActive === "all" || runId(rowsAll, row) === timeActive)
-          : rows,
-      ),
-    [county, rows, rowsAll, timeActive],
-  );
+  const report = useMemo(() => sheetHealth(counted, spans, spansOk), [counted, spans, spansOk]);
   const stepAttention = steps.filter((step) => step.status === "look" || step.status === "wrong");
-  const metricWrong = metrics.filter((metric) => metric.status === "wrong");
-  const metricLook = metrics.filter((metric) => metric.status === "look");
   const headline =
     rows.length === 0
       ? county === "all"
@@ -145,14 +147,7 @@ export function Dashboard() {
           : progress
             ? `${progress.title}: ${stepAttention.length} steps need you.`
             : `${stepAttention.length} steps need you.`
-      : metricWrong.length === 0 && metricLook.length === 0
-        ? "Nothing needs you."
-        : [
-            metricWrong.length === 1 ? "1 is wrong." : metricWrong.length > 1 ? `${metricWrong.length} are wrong.` : "",
-            metricLook.length === 1 ? "1 needs a look." : metricLook.length > 1 ? `${metricLook.length} need a look.` : "",
-          ]
-            .filter(Boolean)
-            .join(" ");
+      : report.headline;
 
   function copyTrace(id: string) {
     void navigator.clipboard.writeText(id).then(
@@ -173,16 +168,8 @@ export function Dashboard() {
             <p className="mt-1 text-base text-fg">{headline}</p>
             <div className="mt-2 flex flex-wrap items-center gap-2">
               <p className="text-xs text-faint">
-                {feedWord(live, stale)} · {readAt} · {rowsAll.length} rows. {feedNote}
+                {feedWord(live, stale)} · {readAt} · {rowsAll.length} rows{feedNote ? `. ${feedNote}` : ""}
               </p>
-              <button
-                type="button"
-                onClick={() => void pull(true)}
-                disabled={refreshing}
-                className="min-h-11 rounded-full border border-line bg-panel px-3 text-sm font-medium text-fg disabled:text-faint"
-              >
-                {refreshing ? "Refreshing" : "Refresh"}
-              </button>
             </div>
           </div>
           <ThemeSwitch />
@@ -229,7 +216,11 @@ export function Dashboard() {
           </section>
         )}
         {progress && (
-          <RunBar progress={progress} statusByStep={new Map(steps.map((step) => [step.id, step.status]))} />
+          <RunBar
+            progress={progress}
+            nowText={nowId ? explainStep(barRows, nowId, true).summary : progress.nowNote}
+            statusByStep={new Map(barSteps.map((step) => [step.id, step.status]))}
+          />
         )}
         <div role="tablist" aria-label="View" className="flex w-fit rounded-full border border-line bg-panel p-1">
           <TabButton active={tab === "steps"} onClick={() => setTab("steps")}>
@@ -283,60 +274,76 @@ export function Dashboard() {
           </ul>
         )}
         <h2 className="mt-4 text-sm text-muted">Working</h2>
-        <p className="mt-2 text-sm leading-relaxed text-fg">
-          {board.working.length === 0
-            ? "Nothing in this view is clear."
-            : board.working.map((item) => `${item.label} · ${item.time}`).join(", ")}
-        </p>
+        {board.working.length === 0 ? (
+          <p className="mt-2 text-sm leading-relaxed text-fg">Nothing in this view is clear.</p>
+        ) : (
+          <ul className="mt-3 flex flex-col gap-3">
+            {board.working.map((item) => (
+              <li key={item.id} className="border-t border-line pt-3 first:border-t-0 first:pt-0">
+                <p className="flex items-baseline justify-between gap-3">
+                  <span className="text-base text-fg">{item.label}</span>
+                  <span className="shrink-0 text-sm font-medium text-ok">Clear</span>
+                </p>
+                <p className="mt-1 text-sm leading-relaxed text-fg">{item.what}</p>
+                <p className="mt-1 text-sm leading-relaxed text-muted">{item.where}</p>
+              </li>
+            ))}
+          </ul>
+        )}
       </section>
       <ol className="flex flex-col gap-1">
         {steps.map((step) => {
-          const shown = open === step.id || pinned === step.id;
+          const face = explainStep(rows, step.id, step.id === nowForList);
+          const shown = debugOpen === step.id;
           return (
-            <li
-              key={step.id}
-              className={`relative rounded-card border border-line bg-panel ${shown ? "z-20" : ""}`}
-              onMouseEnter={() => setOpen(step.id)}
-              onMouseLeave={() => setOpen((current) => (current === step.id ? null : current))}
-            >
-              <button
-                type="button"
-                className="flex min-h-12 w-full items-center gap-3 px-4 py-3 text-left"
-                aria-expanded={shown}
-                aria-describedby={shown ? `tip-${step.id}` : undefined}
-                onClick={() => setPinned((current) => (current === step.id ? null : step.id))}
-              >
-                <span className={`size-2.5 shrink-0 rounded-full ${dot(step.status)}`} aria-hidden="true" />
-                <span className="min-w-0 flex-1 text-base text-fg">{step.label}</span>
-                <span className={`shrink-0 text-sm font-medium ${tone(step.status)}`}>
-                  {step.status ? STATUS_WORD[step.status] : "Not logged"}
-                </span>
-              </button>
-              {(step.reason || step.sources || step.traceIds.length > 0) && (
-                <div className="px-4 pb-3 pl-9">
-                  {step.reason && <p className="text-sm leading-relaxed text-muted">{step.reason}</p>}
-                  {step.sources && <p className="mt-1 text-sm leading-relaxed text-muted">Sources: {step.sources}</p>}
-                  <p className="mt-1 flex flex-wrap gap-x-3 gap-y-1">
-                    {step.traceIds.map((id, index) => (
-                      <button
-                        key={`${id}-${index}`}
-                        type="button"
-                        onClick={() => copyTrace(id)}
-                        className="break-all text-left font-mono text-xs text-faint underline decoration-line underline-offset-2"
-                      >
-                        {copied === id ? "Copied" : id}
-                      </button>
-                    ))}
-                  </p>
+            <li key={step.id} className="rounded-card border border-line bg-panel">
+              <div className="flex items-start">
+                <div className="min-w-0 flex-1 px-4 py-3">
+                  <div className="flex items-center gap-3">
+                    <span className={`size-2.5 shrink-0 rounded-full ${dot(step.status)}`} aria-hidden="true" />
+                    <span className="min-w-0 flex-1 text-base text-fg">{step.label}</span>
+                    <span className={`shrink-0 text-sm font-medium ${tone(step.status)}`}>
+                      {step.status ? STATUS_WORD[step.status] : "Not logged"}
+                    </span>
+                  </div>
+                  <p className="mt-1 pl-5 text-sm leading-relaxed text-fg">{face.summary}</p>
+                  {face.where && <p className="mt-1 pl-5 text-sm leading-relaxed text-muted">{face.where}</p>}
                 </div>
-              )}
+                {face.debug.length > 0 && (
+                  <button
+                    type="button"
+                    aria-label={shown ? "Hide debug log" : "Show debug log"}
+                    aria-expanded={shown}
+                    aria-controls={`debug-${step.id}`}
+                    onClick={() => setDebugOpen((current) => (current === step.id ? null : step.id))}
+                    className="mt-1 mr-1 grid min-h-11 min-w-11 place-items-center rounded-full text-faint"
+                  >
+                    <Bug className="size-4" strokeWidth={2} aria-hidden="true" />
+                  </button>
+                )}
+              </div>
               {shown && (
-                <div
-                  id={`tip-${step.id}`}
-                  role="tooltip"
-                  className="absolute left-3 right-3 top-full z-30 mt-1 rounded-xl border border-line bg-ink px-3 py-3 text-sm leading-relaxed text-fg shadow-lg"
-                >
-                  {step.tip}
+                <div id={`debug-${step.id}`} className="border-t border-line px-4 py-3">
+                  {face.debug.map((line, index) => {
+                    const trace = line.startsWith("Trace: ") ? line.slice("Trace: ".length) : null;
+                    if (!trace) {
+                      return (
+                        <p key={`${step.id}-${index}`} className="break-words font-mono text-xs leading-relaxed text-muted">
+                          {line}
+                        </p>
+                      );
+                    }
+                    return (
+                      <button
+                        key={`${step.id}-${index}`}
+                        type="button"
+                        onClick={() => copyTrace(trace)}
+                        className="block break-all text-left font-mono text-xs leading-relaxed text-faint underline decoration-line underline-offset-2"
+                      >
+                        {copied === trace ? "Copied" : line}
+                      </button>
+                    );
+                  })}
                 </div>
               )}
             </li>
@@ -345,131 +352,87 @@ export function Dashboard() {
       </ol>
       </>
       ) : (
-        <div className="flex flex-col gap-6">
-          <HealthView health={health} />
-          <section className="flex flex-col gap-3">
-            <h2 className="text-sm text-muted">Drift</h2>
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          {metrics.map((metric) => {
-            const shown = open === metric.id || pinned === metric.id;
-            return (
-              <article
-                key={metric.id}
-                className={`relative rounded-card border border-line bg-panel ${shown ? "z-20" : ""}`}
-                onMouseEnter={() => setOpen(metric.id)}
-                onMouseLeave={() => setOpen((current) => (current === metric.id ? null : current))}
-              >
-                <button
-                  type="button"
-                  className="flex w-full flex-col gap-2 px-4 py-4 text-left"
-                  aria-expanded={shown}
-                  aria-describedby={shown ? `tip-${metric.id}` : undefined}
-                  onClick={() => setPinned((current) => (current === metric.id ? null : metric.id))}
-                >
-                  <span className="flex items-center justify-between gap-3">
-                    <span className="text-sm text-muted">{metric.label}</span>
-                    <span className={`shrink-0 text-sm font-medium ${tone(metric.status)}`}>{metric.word}</span>
-                  </span>
-                  <span className="font-display text-3xl text-fg">{metric.figure}</span>
-                  <span className="text-sm leading-relaxed text-muted">{metric.result}</span>
-                </button>
-                {metric.traceIds.length > 0 && (
-                  <p className="flex flex-wrap gap-x-3 gap-y-1 px-4 pb-4">
-                    {metric.traceIds.map((id, index) => (
-                      <button
-                        key={`${id}-${index}`}
-                        type="button"
-                        onClick={() => copyTrace(id)}
-                        className="break-all text-left font-mono text-xs text-faint underline decoration-line underline-offset-2"
-                      >
-                        {copied === id ? "Copied" : id}
-                      </button>
-                    ))}
-                  </p>
-                )}
-                {shown && (
-                  <div
-                    id={`tip-${metric.id}`}
-                    role="tooltip"
-                    className="absolute left-3 right-3 top-full z-30 mt-1 rounded-xl border border-line bg-ink px-3 py-3 text-sm leading-relaxed text-fg shadow-lg"
-                  >
-                    {metric.tip}
-                  </div>
-                )}
-              </article>
-            );
-          })}
-            </div>
-          </section>
-        </div>
+        <HealthSheet report={report} live={live} />
       )}
     </main>
   );
 }
 
-function HealthView({ health }: { health: Health }) {
-  const pct = (value: number) => `${Math.round(value * 100)}%`;
-  const rateTone = (value: number, target: number) => (value >= target ? "text-ok" : "text-bad");
-  const confText =
-    health.meanConfidence == null
-      ? "—"
-      : pct(health.meanConfidence);
+function oneDecimal(value: number): string {
+  return `${(value * 100).toFixed(1)}%`;
+}
+
+function HealthSheet({ report, live }: { report: SheetHealth; live: boolean }) {
+  const schemaOk = report.schemaRate >= 0.9;
+  const autonomyOk = report.autonomyRate >= 0.8;
+  const confText = report.meanConfidence == null ? "—" : oneDecimal(report.meanConfidence);
   const confRange =
-    health.confMin == null || health.confMax == null
+    report.confMin == null || report.confMax == null
       ? "No confidence logged"
-      : `${health.confMin.toFixed(2)}–${health.confMax.toFixed(2)}`;
+      : `${report.confMin.toFixed(2)} to ${report.confMax.toFixed(2)}`;
+  const latest = report.latest ? displayTime(report.latest) : "—";
 
   return (
     <div className="flex flex-col gap-4">
-      <p className="text-sm text-muted">
-        {health.eventCount} events · Latest {health.latest || "—"} · {health.county}
+      <p className="text-sm leading-relaxed text-muted">
+        {live
+          ? "Counted with the health tab's formulas, on every log row, including test rows. A saved health tab can lag this live count."
+          : "Saved copy. These numbers update when the sheet answers."}{" "}
+        {report.eventCount} events. Latest {latest}
+        {report.latestCounty ? ` · ${report.latestCounty}` : ""}.
       </p>
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
         <Score
           label="Schema integrity"
-          figure={pct(health.schemaRate)}
-          detail={`${health.schemaValid} of ${health.eventCount} complete`}
-          target="Target 90%"
-          toneClass={rateTone(health.schemaRate, TARGETS.schema)}
-          tip="Share of handoffs that arrived with a complete schema. Under 90%, a later step is working from a hole."
+          figure={oneDecimal(report.schemaRate)}
+          detail={`${report.schemaValid} of ${report.eventCount} rows arrived complete.`}
+          target="Target 90%."
+          toneClass={schemaOk ? "text-ok" : "text-bad"}
         />
         <Score
-          label="Autonomy"
-          figure={pct(health.autonomyRate)}
-          detail={`${health.autoCount} auto · ${health.humanCount} asked a person`}
-          target="Target 80%"
-          toneClass={rateTone(health.autonomyRate, TARGETS.autonomy)}
-          tip="Share of rows that finished without asking a person. Under 80%, the run is leaning on you."
+          label="Workforce autonomy"
+          figure={oneDecimal(report.autonomyRate)}
+          detail={
+            report.eventCount - report.autoCount - report.humanCount > 0
+              ? `${report.autoCount} finished alone. ${report.humanCount} asked a person. ${report.eventCount - report.autoCount - report.humanCount} don't say.`
+              : `${report.autoCount} finished alone. ${report.humanCount} asked a person.`
+          }
+          target="Target 80%."
+          toneClass={autonomyOk ? "text-ok" : "text-bad"}
         />
         <Score
-          label="Confidence"
+          label="Mean confidence"
           figure={confText}
           detail={confRange}
-          target="Target 80%"
-          toneClass={health.meanConfidence == null ? "text-faint" : rateTone(health.meanConfidence, TARGETS.confidence)}
-          tip="Average self-reported confidence on the rows in this filter. Under 80% is a weak read."
-        />
-        <Score
-          label="Avg tokens"
-          figure={health.avgTokens == null ? "—" : String(health.avgTokens)}
-          detail={`${health.totalTokens.toLocaleString()} total`}
-          target="Estimate"
+          target="The sheet sets no cutoff."
           toneClass="text-fg"
-          tip="Mean of the token estimates on these rows. The sheet does not store exact token counts."
         />
         <Score
-          label="Audit rate"
-          figure={pct(health.auditRate)}
-          detail={`${health.hashCount} of ${health.eventCount} have a content hash`}
-          target="Target 90%"
-          toneClass={rateTone(health.auditRate, TARGETS.audit)}
-          tip="Share of rows that carry a content hash. Under 90%, most handoffs cannot be checked later."
+          label="Avg token intensity"
+          figure={report.avgTokens == null ? "—" : String(report.avgTokens)}
+          detail={
+            report.tokenRows === 0
+              ? "No token estimates on the log."
+              : `${report.totalTokens.toLocaleString()} tokens across ${report.tokenRows} rows.`
+          }
+          target="Blank cells are left out."
+          toneClass="text-fg"
+        />
+        <Score
+          label="Telemetry audit rate"
+          figure={oneDecimal(report.auditRate)}
+          detail={`${report.hashCount} of ${report.eventCount} rows have a content hash.`}
+          target="The sheet sets no cutoff."
+          toneClass="text-fg"
         />
       </div>
       <section>
-        <h2 className="mb-2 text-sm text-muted">Channels</h2>
-        {health.channels.length === 0 ? (
-          <p className="text-sm text-muted">No handoffs in this filter.</p>
+        <h2 className="mb-1 text-sm text-muted">Channels</h2>
+        <p className="mb-2 text-sm leading-relaxed text-muted">
+          Handoffs between people and agents. Internal work steps are left out, the same way the health tab leaves them out.
+        </p>
+        {report.channels.length === 0 ? (
+          <p className="text-sm text-muted">No handoffs on the log.</p>
         ) : (
           <div className="overflow-x-auto rounded-card border border-line bg-panel">
             <table className="w-full min-w-[36rem] text-left text-sm">
@@ -478,31 +441,49 @@ function HealthView({ health }: { health: Health }) {
                   <th className="px-3 py-2 font-medium">From</th>
                   <th className="px-3 py-2 font-medium">To</th>
                   <th className="px-3 py-2 font-medium">Handoffs</th>
-                  <th className="px-3 py-2 font-medium">Fails</th>
+                  <th className="px-3 py-2 font-medium">Schema fails</th>
                   <th className="px-3 py-2 font-medium">Pass</th>
-                  <th className="px-3 py-2 font-medium">Asked</th>
+                  <th className="px-3 py-2 font-medium">Asked a person</th>
                 </tr>
               </thead>
               <tbody>
-                {health.channels.map((channel) => (
+                {report.channels.map((channel) => (
                   <tr key={`${channel.from}-${channel.to}`} className="border-t border-line">
                     <td className="px-3 py-2">{channel.from}</td>
-                    <td className="px-3 py-2">{channel.to}</td>
+                    <td className="px-3 py-2">
+                      {channel.to}
+                      {channel.extra ? <span className="mt-1 block text-xs text-faint">On the log. The health tab has no row for this pair.</span> : null}
+                    </td>
                     <td className="px-3 py-2">{channel.handoffs}</td>
                     <td className="px-3 py-2">{channel.fails}</td>
-                    <td className={`px-3 py-2 ${rateTone(channel.passRate, TARGETS.schema)}`}>{pct(channel.passRate)}</td>
-                    <td className="px-3 py-2">{pct(channel.intervention)}</td>
+                    <td className="px-3 py-2">{oneDecimal(channel.passRate)}</td>
+                    <td className="px-3 py-2">{oneDecimal(channel.intervention)}</td>
                   </tr>
                 ))}
+                {report.channelTotal && (
+                  <tr className="border-t border-line font-medium">
+                    <td className="px-3 py-2">Total</td>
+                    <td className="px-3 py-2 text-muted">The four pairs on the health tab.</td>
+                    <td className="px-3 py-2">{report.channelTotal.handoffs}</td>
+                    <td className="px-3 py-2">{report.channelTotal.fails}</td>
+                    <td className="px-3 py-2">{oneDecimal(report.channelTotal.passRate)}</td>
+                    <td className="px-3 py-2">{oneDecimal(report.channelTotal.intervention)}</td>
+                  </tr>
+                )}
               </tbody>
             </table>
           </div>
         )}
       </section>
       <section>
-        <h2 className="mb-2 text-sm text-muted">Steps</h2>
-        {health.steps.length === 0 ? (
-          <p className="text-sm text-muted">No steps in this filter.</p>
+        <h2 className="mb-1 text-sm text-muted">Steps</h2>
+        <p className="mb-2 text-sm leading-relaxed text-muted">
+          From the trace spans. A run is one handoff id. Pending spans stay out of the pass rate. Fail and partial spans are the flags.
+        </p>
+        {!report.spansLoaded ? (
+          <p className="text-sm text-muted">Trace spans did not load, so this table is empty. The scores above still come from the log.</p>
+        ) : report.steps.length === 0 ? (
+          <p className="text-sm text-muted">No internal steps in the trace spans.</p>
         ) : (
           <div className="overflow-x-auto rounded-card border border-line bg-panel">
             <table className="w-full min-w-[40rem] text-left text-sm">
@@ -510,28 +491,49 @@ function HealthView({ health }: { health: Health }) {
                 <tr>
                   <th className="px-3 py-2 font-medium">Step</th>
                   <th className="px-3 py-2 font-medium">Phase</th>
-                  <th className="px-3 py-2 font-medium">Runs</th>
+                  <th className="px-3 py-2 font-medium">Executions</th>
                   <th className="px-3 py-2 font-medium">Pass</th>
-                  <th className="px-3 py-2 font-medium">Tokens</th>
+                  <th className="px-3 py-2 font-medium">Avg tokens</th>
                   <th className="px-3 py-2 font-medium">Flags</th>
                 </tr>
               </thead>
               <tbody>
-                {health.steps.map((step) => (
+                {report.steps.map((step) => (
                   <tr key={step.step} className="border-t border-line">
-                    <td className="px-3 py-2">{step.label}</td>
+                    <td className="px-3 py-2">{step.step}</td>
                     <td className="px-3 py-2 text-muted">{step.phase}</td>
                     <td className="px-3 py-2">{step.executions}</td>
-                    <td className={`px-3 py-2 ${rateTone(step.passRate, TARGETS.schema)}`}>{pct(step.passRate)}</td>
-                    <td className="px-3 py-2">{step.avgTokens == null ? "—" : step.avgTokens}</td>
-                    <td className="px-3 py-2">{step.flags}</td>
+                    <td className="px-3 py-2">{oneDecimal(step.passRate)}</td>
+                    <td className="px-3 py-2">{step.avgTokens}</td>
+                    <td className={`px-3 py-2 ${step.flags > 0 ? "text-bad" : ""}`}>{step.flags}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
         )}
+        <p className="mt-2 text-sm leading-relaxed text-faint">
+          Avg tokens stay n/a here. Trace rows don't carry a token estimate. The token score above is from the log.
+        </p>
       </section>
+      {report.logOnly.length > 0 && (
+        <section>
+          <h2 className="mb-1 text-sm text-muted">Also on the log</h2>
+          <p className="mb-2 text-sm leading-relaxed text-muted">
+            These steps are on the log. The span table above doesn't list them, and they still count in the scores.
+          </p>
+          <ul className="flex flex-col gap-2">
+            {report.logOnly.map((step) => (
+              <li key={step.step} className="flex items-baseline justify-between gap-3 text-sm">
+                <span className="text-fg">
+                  {step.step} <span className="text-muted">· {step.phase}</span>
+                </span>
+                <span className="shrink-0 text-muted">{step.rows} {step.rows === 1 ? "row" : "rows"}</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
     </div>
   );
 }
@@ -542,17 +544,15 @@ function Score({
   detail,
   target,
   toneClass,
-  tip,
 }: {
   label: string;
   figure: string;
   detail: string;
   target: string;
   toneClass: string;
-  tip: string;
 }) {
   return (
-    <div className="rounded-card border border-line bg-panel px-3 py-3" title={tip}>
+    <div className="rounded-card border border-line bg-panel px-3 py-3">
       <p className="text-xs text-muted">{label}</p>
       <p className={`font-display text-2xl ${toneClass}`}>{figure}</p>
       <p className="text-xs leading-relaxed text-muted">{detail}</p>
@@ -605,7 +605,15 @@ function CountyChip({
 
 const STAGE_BAR = { bad: "bg-bad", watch: "bg-watch", ok: "bg-ok", line: "bg-line" } as const;
 
-function RunBar({ progress, statusByStep }: { progress: RunProgress; statusByStep: Map<string, Status | null> }) {
+function RunBar({
+  progress,
+  nowText,
+  statusByStep,
+}: {
+  progress: RunProgress;
+  nowText: string;
+  statusByStep: Map<string, Status | null>;
+}) {
   return (
     <section aria-label={`${progress.title} progress`} className="rounded-card border border-line bg-panel px-4 py-4">
       <div className="flex items-baseline justify-between gap-3">
@@ -615,9 +623,7 @@ function RunBar({ progress, statusByStep }: { progress: RunProgress; statusBySte
         </p>
       </div>
       <p className="mt-1 text-lg text-fg">Now: {progress.nowLabel}</p>
-      <p className="mt-1 line-clamp-3 text-sm leading-relaxed text-muted" title={progress.nowNote}>
-        {progress.nowNote}
-      </p>
+      <p className="mt-1 text-sm leading-relaxed text-muted">{nowText}</p>
       <ol className="mt-3 flex gap-1" aria-label={`${progress.done} of ${progress.total} stages logged`}>
         {progress.stages.map((stage) => {
           const status = statusByStep.get(stage.id) ?? null;

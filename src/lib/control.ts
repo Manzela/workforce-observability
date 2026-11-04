@@ -1,4 +1,5 @@
-import { counties, publicText, reason, rowStatus, stepCoverage } from "./evaluate.ts";
+import { counties, rowStatus, stepCoverage } from "./evaluate.ts";
+import { explainStep } from "./plain.ts";
 import { clockMs } from "./parse-sheet.ts";
 import { PIPELINE_STEPS, type LogRow, type Status } from "../data/log.ts";
 
@@ -42,14 +43,8 @@ function stepLabel(step: string): string {
   return PIPELINE_STEPS.find((item) => item.id === step)?.label ?? (step ? `Other · ${step}` : "Unknown step");
 }
 
-function whereOf(row: LogRow): string {
-  const hop = [row.from, row.to].filter(Boolean).join(" → ");
-  return publicText([row.county, row.time, hop].filter(Boolean).join(" · "));
-}
-
-function whatOf(row: LogRow, status: Status): string {
-  if (status === "clear") return "Complete.";
-  return reason(row) ?? "Needs a look.";
+function whatOf(row: LogRow): string {
+  return explainStep([row], row.step, false).summary;
 }
 
 function newest(rows: LogRow[]): LogRow | null {
@@ -65,8 +60,8 @@ export function latestEvent(rows: LogRow[]): LatestEvent | null {
   return {
     label: stepLabel(row.step),
     status,
-    what: whatOf(row, status),
-    where: whereOf(row),
+    what: whatOf(row),
+    where: explainStep([row], row.step, false).where,
     traceId: row.id,
     county: row.county,
     time: row.time,
@@ -74,7 +69,7 @@ export function latestEvent(rows: LogRow[]): LatestEvent | null {
 }
 
 /** Logged steps in this filter, split into what needs a person and what is clear. */
-export function attention(rows: LogRow[]): Attention {
+export function attention(rows: LogRow[], nowId: string | null = null): Attention {
   const byId = new Map(rows.map((row) => [row.id, row]));
   const issues: AttentionItem[] = [];
   const working: AttentionItem[] = [];
@@ -82,12 +77,13 @@ export function attention(rows: LogRow[]): Attention {
     if (!step.status) continue;
     const row = step.traceIds.map((id) => byId.get(id)).find((item) => item);
     if (!row) continue;
+    const face = explainStep(rows, step.id, step.id === nowId);
     const item: AttentionItem = {
       id: step.id,
       label: step.label,
       status: step.status,
-      what: step.status === "clear" ? "Complete." : (step.reason ?? "Needs a look."),
-      where: whereOf(row),
+      what: face.summary,
+      where: face.where,
       time: row.time,
       traceId: row.id,
     };

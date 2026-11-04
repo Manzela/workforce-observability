@@ -12,12 +12,27 @@ function isStop(cascade: string): boolean {
   return value !== "" && value !== "none" && value !== "n/a";
 }
 
+/** A re-check failed. A PASS line that merely names a failures file does not count. */
+export function recheckFailed(text: string): boolean {
+  const verdict = text.trim();
+  if (!verdict || /^n\/a\b/i.test(verdict) || /^pass\b/i.test(verdict)) return false;
+  return /\b(fail|failed|mismatch)\b/i.test(verdict);
+}
+
+/** A cascade note is a stop when it says the work is unfinished. A passed row with a side note is only a caveat. */
+export function cascadeWeight(row: Pick<LogRow, "cascade" | "critic">): "stop" | "caveat" | "none" {
+  if (!isStop(row.cascade)) return "none";
+  const unfinished = /\b(partial|incomplete|blocked|stopped|open)\b|rate limit/i.test(row.cascade);
+  if (/^(pass|accepted)\b/i.test(row.critic.trim()) && !unfinished) return "caveat";
+  return "stop";
+}
+
 export function rowStatus(row: LogRow): Status {
-  const stopped = isStop(row.cascade);
-  const failed = /fail|mismatch/i.test(row.reverify);
-  if (!row.schemaComplete || stopped || failed) return "wrong";
+  const weight = cascadeWeight(row);
+  const failed = recheckFailed(row.reverify);
+  if (!row.schemaComplete || weight === "stop" || failed) return "wrong";
   const flagged = /flag/i.test(row.critic);
-  if (row.human || flagged || row.confidence === null || row.confidence < 0.8) return "look";
+  if (weight === "caveat" || row.human || flagged || row.confidence === null || row.confidence < 0.8) return "look";
   return "clear";
 }
 
@@ -27,8 +42,9 @@ export function reason(row: LogRow): string | null {
   if (/flag/i.test(row.critic) && flag) {
     return publicText(flag.charAt(0).toUpperCase() + flag.slice(1));
   }
-  if (/fail|mismatch/i.test(row.reverify)) return "A re-check did not match.";
-  if (isStop(row.cascade)) return "This handoff was stopped.";
+  if (recheckFailed(row.reverify)) return "A re-check did not match.";
+  if (cascadeWeight(row) === "stop") return "This handoff was stopped.";
+  if (cascadeWeight(row) === "caveat") return "A caveat was logged.";
   if (row.human) return "A person was asked.";
   if (!row.schemaComplete) return "The record was incomplete.";
   if (row.confidence === null) return "Confidence is missing.";
@@ -50,8 +66,9 @@ function whatHappened(row: LogRow): string {
     return "The latest row is complete.";
   }
   if (!row.schemaComplete) return "The latest row is incomplete, so this step isn't done.";
-  if (isStop(row.cascade)) return "The latest row was stopped.";
-  if (/fail|mismatch/i.test(row.reverify)) return "The latest row failed its re-check.";
+  if (cascadeWeight(row) === "stop") return "The latest row was stopped.";
+  if (cascadeWeight(row) === "caveat") return "The latest row logged a caveat.";
+  if (recheckFailed(row.reverify)) return "The latest row failed its re-check.";
   if (/flag/i.test(row.critic)) {
     const flag = row.critic
       .replace(/^pass with flags:\s*/i, "")

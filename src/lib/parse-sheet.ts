@@ -53,6 +53,14 @@ function bool(value: string): boolean {
   return value.trim().toUpperCase() === "TRUE";
 }
 
+/** Blank stays unknown. Only an exact FALSE is a no. */
+function boolFalse(value: string): boolean | null {
+  const text = value.trim().toUpperCase();
+  if (text === "TRUE") return true;
+  if (text === "FALSE") return false;
+  return null;
+}
+
 /** Sheet step names that are the same stage under another id. */
 const STEP_ALIAS: Record<string, string> = {
   street_view_list_prep: "sv_classify",
@@ -118,6 +126,7 @@ export function rowsFromSheetText(text: string): LogRow[] {
         from,
         to: cell(row, "to_bot"),
         step: canonicalStep(cell(row, "step_type")),
+        sheetStep: cell(row, "step_type"),
         county: cell(row, "county_code"),
         schemaComplete: bool(cell(row, "schema_complete")),
         confidence: num(cell(row, "confidence")),
@@ -125,7 +134,7 @@ export function rowsFromSheetText(text: string): LogRow[] {
         critic: cell(row, "critic_result"),
         hash: cell(row, "constraint_hash"),
         contentHash: cell(row, "content_hash"),
-        human: bool(cell(row, "human_intervention")),
+        human: boolFalse(cell(row, "human_intervention")),
         reverify: cell(row, "re_verify_result"),
         notes: cell(row, "outcome_notes"),
         sources: cell(row, "sources_refs"),

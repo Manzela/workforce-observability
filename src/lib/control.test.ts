@@ -25,7 +25,7 @@ test("the newest sheet row stays visible when the filter is another county", () 
   assert.equal(latest.county, "BARTOW-GA");
   assert.equal(latest.label, "People search");
   assert.equal(latest.status, "wrong");
-  assert.equal(latest.what, "A re-check did not match.");
+  assert.equal(latest.what, "The person search failed. The re-check did not match.");
   assert.equal(latest.where, "BARTOW-GA · 4 Nov, 09:10 · Acquisition Agent → Envoy");
   assert.equal(latest.time, "4 Nov, 09:10");
   const clayton = runProgress(rows);
@@ -51,15 +51,15 @@ test("attention names what is wrong and what is clear, with where", () => {
     ["People search", "Traffic"],
   );
   assert.equal(board.issues[0].status, "wrong");
-  assert.equal(board.issues[0].what, "A re-check did not match.");
+  assert.equal(board.issues[0].what, "The person search failed. The re-check did not match.");
   assert.match(board.issues[0].where, /BARTOW-GA · 4 Nov, 09:10/);
   assert.equal(board.issues[1].status, "look");
-  assert.equal(board.issues[1].what, "Confidence is low.");
+  assert.equal(board.issues[1].what, "This step needs a look. Confidence is 0.5, under 0.8.");
   assert.deepEqual(
     board.working.map((item) => item.label),
     ["County request"],
   );
-  assert.equal(board.working[0].what, "Complete.");
+  assert.equal(board.working[0].what, "County request accepted.");
   assert.equal(board.working[0].time, "2 Nov, 22:10");
   assert.match(board.working[0].where, /BARTOW-GA · 2 Nov, 22:10/);
 });
@@ -81,7 +81,7 @@ test("counties with failures sort ahead of a clear county", () => {
   assert.equal(watch[0].latestStatus, "wrong");
   assert.equal(watch[1].wrong, 0);
   assert.equal(watch[1].clear, 1);
-  assert.equal(watch[1].latestWhat, "Complete.");
+  assert.equal(watch[1].latestWhat, "Accepted.");
 });
 
 test("a step that failed only on an earlier run stays in the county picture", () => {
