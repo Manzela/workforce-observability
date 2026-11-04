@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
-import { attention, countyWatch, feedFailureNote, feedWord, latestEvent } from "./control.ts";
+import { attention, countyWatch, feedFailureNote, feedWord, latestEvent, stageMark } from "./control.ts";
 import { rowsFromSheetText, runProgress } from "./parse-sheet.ts";
 
 const csv = readFileSync(new URL("../data/sheet-fallback.csv", import.meta.url), "utf8");
@@ -82,6 +82,27 @@ test("counties with failures sort ahead of a clear county", () => {
   assert.equal(watch[1].wrong, 0);
   assert.equal(watch[1].clear, 1);
   assert.equal(watch[1].latestWhat, "Complete.");
+});
+
+test("a step that failed only on an earlier run stays in the county picture", () => {
+  const rows = sheet(
+    "2026-11-02T22:10:00+02:00,bartow-old-listing,Envoy,Acquisition Agent,listing_lookup,TRUE,0.95,none,pass,FALSE,mismatch,BARTOW-GA,Stopped.\n" +
+      "2026-11-04T09:10:00+02:00,bartow-new-tps,Acquisition Agent,Envoy,tps_lookup,TRUE,0.95,none,pass,FALSE,pass,BARTOW-GA,Matched.",
+  );
+  const across = attention(rows);
+  assert.equal(across.issues.some((item) => item.label === "Listing lookup" && item.status === "wrong"), true);
+  assert.match(across.issues.find((item) => item.label === "Listing lookup")?.where ?? "", /2 Nov, 22:10/);
+  const newestRun = attention(rows.filter((row) => row.handoffId === "bartow-new-tps"));
+  assert.equal(newestRun.issues.some((item) => item.label === "Listing lookup"), false);
+});
+
+test("a logged failure is not painted as finished", () => {
+  assert.equal(stageMark("done", "wrong"), "bad");
+  assert.equal(stageMark("done", "look"), "watch");
+  assert.equal(stageMark("done", "clear"), "ok");
+  assert.equal(stageMark("now", "wrong"), "bad");
+  assert.equal(stageMark("waiting", null), "line");
+  assert.equal(stageMark("done", null), "line");
 });
 
 test("a failed refresh keeps the last live wording only after a live read", () => {

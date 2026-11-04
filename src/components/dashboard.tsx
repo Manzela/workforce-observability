@@ -3,7 +3,7 @@ import { Moon, Sun } from "lucide-react";
 import { counties, stepCoverage } from "@/lib/evaluate";
 import { metricBoard } from "@/lib/metrics";
 import { computeHealth, TARGETS, type Health } from "@/lib/health";
-import { attention, countyWatch, feedFailureNote, feedWord, latestEvent, type CountyWatch } from "@/lib/control";
+import { attention, countyWatch, feedFailureNote, feedWord, latestEvent, stageMark, type CountyWatch } from "@/lib/control";
 import { activeRunId, displayTime, runId, runProgress, runsForCounty, type RunProgress } from "@/lib/parse-sheet";
 import { pullLiveLog } from "@/lib/live-log";
 import { FALLBACK_READ_AT, FALLBACK_ROWS } from "@/data/fallback";
@@ -196,7 +196,7 @@ export function Dashboard() {
                 pressed={county === item.county}
                 onChoose={() => {
                   setCounty(item.county);
-                  setTime("latest");
+                  setTime("all");
                 }}
               />
             ))}
@@ -219,7 +219,7 @@ export function Dashboard() {
                   className="min-h-11 rounded-full border border-line bg-ink px-3 text-sm font-medium text-fg"
                   onClick={() => {
                     setCounty(latest.county);
-                    setTime("latest");
+                    setTime("all");
                   }}
                 >
                   Show {latest.county}
@@ -228,7 +228,9 @@ export function Dashboard() {
             )}
           </section>
         )}
-        {progress && <RunBar progress={progress} />}
+        {progress && (
+          <RunBar progress={progress} statusByStep={new Map(steps.map((step) => [step.id, step.status]))} />
+        )}
         <div role="tablist" aria-label="View" className="flex w-fit rounded-full border border-line bg-panel p-1">
           <TabButton active={tab === "steps"} onClick={() => setTab("steps")}>
             Steps
@@ -261,7 +263,9 @@ export function Dashboard() {
       <>
       <section aria-label="This view" className="rounded-card border border-line bg-panel px-4 py-4">
         <h2 className="text-sm text-muted">Needs you</h2>
-        <p className="mt-1 text-sm text-faint">In the county and time selected above.</p>
+        <p className="mt-1 text-sm text-faint">
+          {timeActive === "all" ? "Latest row of each step in this county." : "In the county and time selected above."}
+        </p>
         {board.issues.length === 0 ? (
           <p className="mt-2 text-sm leading-relaxed text-fg">Nothing in this view needs you.</p>
         ) : (
@@ -599,7 +603,9 @@ function CountyChip({
   );
 }
 
-function RunBar({ progress }: { progress: RunProgress }) {
+const STAGE_BAR = { bad: "bg-bad", watch: "bg-watch", ok: "bg-ok", line: "bg-line" } as const;
+
+function RunBar({ progress, statusByStep }: { progress: RunProgress; statusByStep: Map<string, Status | null> }) {
   return (
     <section aria-label={`${progress.title} progress`} className="rounded-card border border-line bg-panel px-4 py-4">
       <div className="flex items-baseline justify-between gap-3">
@@ -613,15 +619,19 @@ function RunBar({ progress }: { progress: RunProgress }) {
         {progress.nowNote}
       </p>
       <ol className="mt-3 flex gap-1" aria-label={`${progress.done} of ${progress.total} stages logged`}>
-        {progress.stages.map((stage) => (
-          <li
-            key={stage.id}
-            title={stage.label}
-            className={`h-2 flex-1 rounded-full ${
-              stage.state === "now" ? "bg-watch" : stage.state === "done" ? "bg-ok" : "bg-line"
-            }`}
-          />
-        ))}
+        {progress.stages.map((stage) => {
+          const status = statusByStep.get(stage.id) ?? null;
+          const word = status ? STATUS_WORD[status] : "Not logged";
+          return (
+            <li
+              key={stage.id}
+              title={`${stage.label} · ${word}`}
+              className={`h-2 flex-1 rounded-full ${STAGE_BAR[stageMark(stage.state, status)]} ${
+                stage.state === "now" ? "ring-2 ring-fg ring-offset-1 ring-offset-panel" : ""
+              }`}
+            />
+          );
+        })}
       </ol>
     </section>
   );

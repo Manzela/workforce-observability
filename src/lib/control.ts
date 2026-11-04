@@ -122,6 +122,15 @@ export function countyWatch(rows: LogRow[]): CountyWatch[] {
     .sort((a, b) => b.wrong - a.wrong || b.look - a.look || a.county.localeCompare(b.county));
 }
 
+/** Bar color for one stage. A logged failure stays a failure, including stages before the current one. */
+export function stageMark(state: "waiting" | "done" | "now", status: Status | null): "bad" | "watch" | "ok" | "line" {
+  if (status === "wrong") return "bad";
+  if (status === "look") return "watch";
+  if (status === "clear") return "ok";
+  if (state === "now") return "watch";
+  return "line";
+}
+
 export function feedWord(live: boolean, stale: boolean): string {
   if (stale) return "Last live";
   return live ? "Live" : "Saved";
