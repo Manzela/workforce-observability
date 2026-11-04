@@ -3,6 +3,7 @@ import { Moon, Sun } from "lucide-react";
 import { counties, stepCoverage } from "@/lib/evaluate";
 import { metricBoard } from "@/lib/metrics";
 import { computeHealth, TARGETS, type Health } from "@/lib/health";
+import { attention, countyWatch, feedFailureNote, feedWord, latestEvent, type CountyWatch } from "@/lib/control";
 import { activeRunId, displayTime, runId, runProgress, runsForCounty, type RunProgress } from "@/lib/parse-sheet";
 import { pullLiveLog } from "@/lib/live-log";
 import { FALLBACK_READ_AT, FALLBACK_ROWS } from "@/data/fallback";
@@ -41,8 +42,10 @@ export function Dashboard() {
   const [live, setLive] = useState(false);
   const [readAt, setReadAt] = useState(FALLBACK_READ_AT);
   const [feedNote, setFeedNote] = useState("Sheet copy.");
+  const [stale, setStale] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const alive = useRef(true);
+  const heldLive = useRef(false);
 
   const pull = useCallback(async (manual: boolean) => {
     if (manual) setRefreshing(true);
@@ -52,6 +55,8 @@ export function Dashboard() {
       if (next.rows.length > 0) {
         setRowsAll(next.rows);
         setLive(next.live);
+        setStale(false);
+        if (next.live) heldLive.current = true;
         setReadAt(next.readAt ? displayTime(next.readAt) : "just now");
         setFeedNote(
           next.live
@@ -61,11 +66,13 @@ export function Dashboard() {
         return;
       }
       setLive(false);
-      setFeedNote("Sheet copy.");
+      setStale(heldLive.current);
+      setFeedNote(feedFailureNote(heldLive.current));
     } catch {
       if (!alive.current) return;
       setLive(false);
-      setFeedNote("Sheet copy.");
+      setStale(heldLive.current);
+      setFeedNote(feedFailureNote(heldLive.current));
     } finally {
       if (manual && alive.current) setRefreshing(false);
     }
@@ -103,6 +110,10 @@ export function Dashboard() {
   }, [rowsAll, county, timeActive]);
 
   const steps = stepCoverage(rows);
+  const board = useMemo(() => attention(rows), [rows]);
+  const watch = useMemo(() => countyWatch(rowsAll), [rowsAll]);
+  const latest = useMemo(() => latestEvent(rowsAll), [rowsAll]);
+  const latestInView = latest ? rows.some((row) => row.id === latest.traceId) : true;
   const metrics = useMemo(() => metricBoard(rows, null), [rows]);
   const health = useMemo(() => computeHealth(rows), [rows]);
   const progress = useMemo(
@@ -122,14 +133,18 @@ export function Dashboard() {
       ? county === "all"
         ? "No rows for this time."
         : `No rows for ${county}.`
-      : progress && tab === "steps"
-      ? `Clayton re-run is on ${progress.nowLabel}.`
       : tab === "steps"
       ? stepAttention.length === 0
-        ? "Nothing needs you."
+        ? progress
+          ? `${progress.title} is on ${progress.nowLabel}.`
+          : "Nothing needs you."
         : stepAttention.length === 1
-          ? `1 step needs you: ${stepAttention[0].label}.`
-          : `${stepAttention.length} steps need you.`
+          ? progress
+            ? `${progress.title}: 1 step needs you, ${stepAttention[0].label}.`
+            : `1 step needs you: ${stepAttention[0].label}.`
+          : progress
+            ? `${progress.title}: ${stepAttention.length} steps need you.`
+            : `${stepAttention.length} steps need you.`
       : metricWrong.length === 0 && metricLook.length === 0
         ? "Nothing needs you."
         : [
@@ -158,7 +173,7 @@ export function Dashboard() {
             <p className="mt-1 text-base text-fg">{headline}</p>
             <div className="mt-2 flex flex-wrap items-center gap-2">
               <p className="text-xs text-faint">
-                {live ? "Live" : "Saved"} · {readAt} · {rowsAll.length} rows. {feedNote}
+                {feedWord(live, stale)} · {readAt} · {rowsAll.length} rows. {feedNote}
               </p>
               <button
                 type="button"
@@ -172,6 +187,47 @@ export function Dashboard() {
           </div>
           <ThemeSwitch />
         </div>
+        {watch.length > 0 && (
+          <section aria-label="Counties on the sheet" className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            {watch.map((item) => (
+              <CountyChip
+                key={item.county}
+                item={item}
+                pressed={county === item.county}
+                onChoose={() => {
+                  setCounty(item.county);
+                  setTime("latest");
+                }}
+              />
+            ))}
+          </section>
+        )}
+        {latest && (
+          <section aria-label="Latest log" className="rounded-card border border-line bg-panel px-4 py-4">
+            <p className="text-sm text-muted">Latest on the sheet</p>
+            <p className="mt-1 flex items-baseline justify-between gap-3">
+              <span className="text-lg text-fg">{latest.label}</span>
+              <span className={`text-sm font-medium ${tone(latest.status)}`}>{STATUS_WORD[latest.status]}</span>
+            </p>
+            <p className="mt-1 text-sm leading-relaxed text-fg">{latest.what}</p>
+            <p className="mt-1 text-sm leading-relaxed text-muted">{latest.where}</p>
+            {!latestInView && latest.county && (
+              <div className="mt-3 flex flex-wrap items-center gap-3">
+                <p className="text-sm text-muted">This log is outside the county and time selected below.</p>
+                <button
+                  type="button"
+                  className="min-h-11 rounded-full border border-line bg-ink px-3 text-sm font-medium text-fg"
+                  onClick={() => {
+                    setCounty(latest.county);
+                    setTime("latest");
+                  }}
+                >
+                  Show {latest.county}
+                </button>
+              </div>
+            )}
+          </section>
+        )}
         {progress && <RunBar progress={progress} />}
         <div role="tablist" aria-label="View" className="flex w-fit rounded-full border border-line bg-panel p-1">
           <TabButton active={tab === "steps"} onClick={() => setTab("steps")}>
@@ -202,6 +258,33 @@ export function Dashboard() {
       </header>
 
       {tab === "steps" ? (
+      <>
+      <section aria-label="This view" className="rounded-card border border-line bg-panel px-4 py-4">
+        <h2 className="text-sm text-muted">Needs you</h2>
+        <p className="mt-1 text-sm text-faint">In the county and time selected above.</p>
+        {board.issues.length === 0 ? (
+          <p className="mt-2 text-sm leading-relaxed text-fg">Nothing in this view needs you.</p>
+        ) : (
+          <ul className="mt-3 flex flex-col gap-3">
+            {board.issues.map((item) => (
+              <li key={item.id} className="border-t border-line pt-3 first:border-t-0 first:pt-0">
+                <p className="flex items-baseline justify-between gap-3">
+                  <span className="text-base text-fg">{item.label}</span>
+                  <span className={`shrink-0 text-sm font-medium ${tone(item.status)}`}>{STATUS_WORD[item.status]}</span>
+                </p>
+                <p className="mt-1 text-sm leading-relaxed text-fg">{item.what}</p>
+                <p className="mt-1 text-sm leading-relaxed text-muted">{item.where}</p>
+              </li>
+            ))}
+          </ul>
+        )}
+        <h2 className="mt-4 text-sm text-muted">Working</h2>
+        <p className="mt-2 text-sm leading-relaxed text-fg">
+          {board.working.length === 0
+            ? "Nothing in this view is clear."
+            : board.working.map((item) => `${item.label} · ${item.time}`).join(", ")}
+        </p>
+      </section>
       <ol className="flex flex-col gap-1">
         {steps.map((step) => {
           const shown = open === step.id || pinned === step.id;
@@ -256,6 +339,7 @@ export function Dashboard() {
           );
         })}
       </ol>
+      </>
       ) : (
         <div className="flex flex-col gap-6">
           <HealthView health={health} />
@@ -473,17 +557,61 @@ function Score({
   );
 }
 
+function watchParts(item: CountyWatch): { text: string; toneClass: string }[] {
+  const parts: { text: string; toneClass: string }[] = [];
+  if (item.wrong > 0) parts.push({ text: `${item.wrong} wrong`, toneClass: "text-bad" });
+  if (item.look > 0) parts.push({ text: `${item.look} to look at`, toneClass: "text-watch" });
+  parts.push({ text: `${item.clear} clear`, toneClass: "text-ok" });
+  return parts;
+}
+
+function CountyChip({
+  item,
+  pressed,
+  onChoose,
+}: {
+  item: CountyWatch;
+  pressed: boolean;
+  onChoose: () => void;
+}) {
+  const parts = watchParts(item);
+  return (
+    <button
+      type="button"
+      aria-pressed={pressed}
+      onClick={onChoose}
+      className={`min-h-11 rounded-card border px-4 py-3 text-left ${pressed ? "border-fg bg-panel" : "border-line bg-panel"}`}
+    >
+      <span className="block text-base text-fg">{item.county}</span>
+      <span className="mt-1 block text-sm font-medium">
+        {parts.map((part, index) => (
+          <span key={part.text}>
+            {index > 0 ? " · " : ""}
+            <span className={part.toneClass}>{part.text}</span>
+          </span>
+        ))}
+      </span>
+      <span className="mt-1 block text-sm leading-relaxed text-muted">
+        {item.latestLabel} · {STATUS_WORD[item.latestStatus]} · {item.latestTime}
+      </span>
+      <span className="mt-1 block text-sm leading-relaxed text-fg">{item.latestWhat}</span>
+    </button>
+  );
+}
+
 function RunBar({ progress }: { progress: RunProgress }) {
   return (
-    <section aria-label="Clayton re-run progress" className="rounded-card border border-line bg-panel px-4 py-4">
+    <section aria-label={`${progress.title} progress`} className="rounded-card border border-line bg-panel px-4 py-4">
       <div className="flex items-baseline justify-between gap-3">
-        <p className="text-sm text-muted">Clayton re-run</p>
+        <p className="text-sm text-muted">{progress.title}</p>
         <p className="text-sm font-medium text-fg">
           {progress.done} of {progress.total}
         </p>
       </div>
       <p className="mt-1 text-lg text-fg">Now: {progress.nowLabel}</p>
-      <p className="mt-1 text-sm leading-relaxed text-muted">{progress.nowNote}</p>
+      <p className="mt-1 line-clamp-3 text-sm leading-relaxed text-muted" title={progress.nowNote}>
+        {progress.nowNote}
+      </p>
       <ol className="mt-3 flex gap-1" aria-label={`${progress.done} of ${progress.total} stages logged`}>
         {progress.stages.map((stage) => (
           <li

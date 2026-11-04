@@ -143,6 +143,7 @@ export function rowsFromSheetText(text: string): LogRow[] {
 export type RunStageState = "waiting" | "done" | "now";
 
 export type RunProgress = {
+  title: string;
   county: string;
   done: number;
   total: number;
@@ -265,9 +266,13 @@ export function rowRunLabel(rows: LogRow[], row: LogRow): string {
   return runStarts(rows).find((start) => start.id === id)?.label ?? row.time;
 }
 
-export function runProgress(rows: LogRow[]): RunProgress | null {
-  const run = rows.filter(isActiveRun);
-  if (run.length === 0) return null;
+function placeName(code: string): string {
+  const head = code.split("-")[0] ?? code;
+  if (!head) return "Run";
+  return head.charAt(0).toUpperCase() + head.slice(1).toLowerCase();
+}
+
+function buildProgress(run: LogRow[], title: string, county: string): RunProgress {
   const labels = new Map(PIPELINE_STEPS.map((step) => [step.id, step.label]));
   const logged = new Set(run.map((row) => row.step));
   const work = run.filter((row) => (RUN_STAGES as readonly string[]).includes(row.step));
@@ -280,11 +285,23 @@ export function runProgress(rows: LogRow[]): RunProgress | null {
   });
   const noteSource = latest?.notes?.trim() || latestWork?.notes?.trim() || "Logged. Waiting on the next step.";
   return {
-    county: "Clayton",
+    title,
+    county,
     done: stages.filter((stage) => stage.state !== "waiting").length,
     total: stages.length,
     nowLabel: labels.get(nowId) ?? nowId,
     nowNote: scrubNote(noteSource),
     stages,
   };
+}
+
+export function runProgress(rows: LogRow[]): RunProgress | null {
+  const clayton = rows.filter(isActiveRun);
+  if (clayton.length > 0) return buildProgress(clayton, "Clayton re-run", "Clayton");
+  const codes = [...new Set(rows.map((row) => row.county).filter(Boolean))];
+  if (codes.length !== 1) return null;
+  const hasWork = rows.some((row) => (RUN_STAGES as readonly string[]).includes(row.step));
+  if (!hasWork) return null;
+  const name = placeName(codes[0]);
+  return buildProgress(rows, `${name} run`, name);
 }
