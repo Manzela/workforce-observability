@@ -242,6 +242,24 @@ export function runStarts(rows: LogRow[]): RunStart[] {
   }));
 }
 
+/** Runs that belong to the selected county. `all` keeps every run. */
+export function runsForCounty(rows: LogRow[], county: string): RunStart[] {
+  const scoped = county === "all" ? rows : rows.filter((row) => row.county === county);
+  return runStarts(scoped);
+}
+
+/**
+ * Keep an explicit time only when that run is in the current list.
+ * Otherwise use the preferred run (the Clayton re-run on All counties),
+ * then the newest run in the list.
+ */
+export function activeRunId(starts: RunStart[], time: string, preferId: string | null): string {
+  if (time === "all") return "all";
+  if (starts.some((start) => start.id === time)) return time;
+  if (preferId && starts.some((start) => start.id === preferId)) return preferId;
+  return starts.at(-1)?.id ?? "all";
+}
+
 export function rowRunLabel(rows: LogRow[], row: LogRow): string {
   const id = runId(rows, row);
   return runStarts(rows).find((start) => start.id === id)?.label ?? row.time;

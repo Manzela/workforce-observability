@@ -3,7 +3,7 @@ import { Moon, Sun } from "lucide-react";
 import { counties, stepCoverage } from "@/lib/evaluate";
 import { metricBoard } from "@/lib/metrics";
 import { computeHealth, TARGETS, type Health } from "@/lib/health";
-import { displayTime, runId, runProgress, runStarts, type RunProgress } from "@/lib/parse-sheet";
+import { activeRunId, displayTime, runId, runProgress, runsForCounty, type RunProgress } from "@/lib/parse-sheet";
 import { pullLiveLog } from "@/lib/live-log";
 import { FALLBACK_READ_AT, FALLBACK_ROWS } from "@/data/fallback";
 import type { LogRow, Status } from "@/data/log";
@@ -83,17 +83,16 @@ export function Dashboard() {
     };
   }, [pull]);
 
-  const starts = useMemo(() => runStarts(rowsAll), [rowsAll]);
-  const newest = starts[starts.length - 1];
+  const starts = useMemo(() => runsForCounty(rowsAll, county), [rowsAll, county]);
   const claytonStart = useMemo(() => {
     const clayton = rowsAll.find(
       (row) => row.county === "CLAYTON-GA" && /clayton-(rerun|e2e)/i.test(row.handoffId),
     );
     if (!clayton) return null;
     const id = runId(rowsAll, clayton);
-    return starts.find((start) => start.id === id) ?? null;
-  }, [rowsAll, starts]);
-  const timeActive = time === "all" ? "all" : starts.some((start) => start.id === time) ? time : claytonStart?.id ?? newest?.id ?? "all";
+    return runsForCounty(rowsAll, "all").find((start) => start.id === id) ?? null;
+  }, [rowsAll]);
+  const timeActive = activeRunId(starts, time, county === "all" ? (claytonStart?.id ?? null) : null);
 
   const rows = useMemo(() => {
     return rowsAll.filter((row) => {
@@ -119,7 +118,11 @@ export function Dashboard() {
   const metricWrong = metrics.filter((metric) => metric.status === "wrong");
   const metricLook = metrics.filter((metric) => metric.status === "look");
   const headline =
-    progress && tab === "steps"
+    rows.length === 0
+      ? county === "all"
+        ? "No rows for this time."
+        : `No rows for ${county}.`
+      : progress && tab === "steps"
       ? `Clayton re-run is on ${progress.nowLabel}.`
       : tab === "steps"
       ? stepAttention.length === 0

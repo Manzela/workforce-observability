@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
 import { stepCoverage } from "./evaluate.ts";
-import { liveFeed, rowsFromSheetText, rowRunLabel, runProgress, runStarts } from "./parse-sheet.ts";
+import { activeRunId, liveFeed, rowsFromSheetText, rowRunLabel, runProgress, runsForCounty, runStarts } from "./parse-sheet.ts";
 
 const csv = readFileSync(new URL("../data/sheet-fallback.csv", import.meta.url), "utf8");
 
@@ -117,6 +117,25 @@ test("smoke rows drop out of a live feed and remain when they are the only rows"
   const intake = stepCoverage(mixed.rows).find((step) => step.id === "intake_request");
   assert.equal(intake?.sources, "county-file");
   assert.equal(intake?.status, "clear");
+});
+
+test("a county keeps its own run when the clock still says latest", () => {
+  const rows = rowsFromSheetText(
+    "timestamp,handoff_id,from_bot,step_type,county_code,run_id\n" +
+      "2026-11-02T15:59:00+02:00,clayton-rerun-intake-2026-11-02,Envoy,intake_request,CLAYTON-GA,CLAYTON-GA-2026-11-02-internal\n" +
+      "2026-11-02T22:10:31+02:00,bartow-intake-2026-11-02,Envoy,intake_request,BARTOW-GA,BARTOW-GA-2026-11-02-prod\n" +
+      "2026-11-02T22:20:53+02:00,bartow-cama-2026-11-02,Acquisition Agent,cama_harvest,BARTOW-GA,BARTOW-GA-2026-11-02-prod\n",
+  );
+  const all = runsForCounty(rows, "all");
+  const claytonId = "CLAYTON-GA-2026-11-02-internal";
+  assert.equal(activeRunId(all, "latest", claytonId), claytonId);
+  const bartow = runsForCounty(rows, "BARTOW-GA");
+  assert.equal(bartow.length, 1);
+  assert.equal(bartow[0].label, "2 Nov, 22:10");
+  assert.equal(activeRunId(bartow, "latest", null), "BARTOW-GA-2026-11-02-prod");
+  assert.equal(activeRunId(bartow, claytonId, null), "BARTOW-GA-2026-11-02-prod");
+  const shown = rows.filter((row) => row.county === "BARTOW-GA" && row.loggedRunId === activeRunId(bartow, "latest", null));
+  assert.equal(shown.length, 2);
 });
 
 test("street view list prep is the Street View stage", () => {
