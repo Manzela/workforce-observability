@@ -1,8 +1,12 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { SNAPSHOT_ROWS, counties, stepCoverage, times } from "@/lib/evaluate";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Moon, Sun } from "lucide-react";
+import { counties, stepCoverage } from "@/lib/evaluate";
 import { metricBoard } from "@/lib/metrics";
-import { SHEET_COPY } from "@/data/log";
-import type { Status } from "@/data/log";
+import { computeHealth, TARGETS, type Health } from "@/lib/health";
+import { displayTime, runId, runProgress, runStarts, type RunProgress } from "@/lib/parse-sheet";
+import { pullLiveLog } from "@/lib/live-log";
+import { FALLBACK_READ_AT, FALLBACK_ROWS } from "@/data/fallback";
+import type { LogRow, Status } from "@/data/log";
 
 const STATUS_WORD: Record<Status, string> = {
   clear: "Clear",
@@ -28,27 +32,92 @@ function dot(status: Status | null) {
 
 export function Dashboard() {
   const [county, setCounty] = useState("all");
-  const [time, setTime] = useState("all");
+  const [time, setTime] = useState("latest");
   const [tab, setTab] = useState<"steps" | "metrics">("steps");
   const [copied, setCopied] = useState<string | null>(null);
   const [open, setOpen] = useState<string | null>(null);
   const [pinned, setPinned] = useState<string | null>(null);
+  const [rowsAll, setRowsAll] = useState<LogRow[]>(FALLBACK_ROWS);
+  const [live, setLive] = useState(false);
+  const [readAt, setReadAt] = useState(FALLBACK_READ_AT);
+  const [feedNote, setFeedNote] = useState("Sheet copy.");
+  const [refreshing, setRefreshing] = useState(false);
+  const alive = useRef(true);
+
+  const pull = useCallback(async (manual: boolean) => {
+    if (manual) setRefreshing(true);
+    try {
+      const next = await pullLiveLog();
+      if (!alive.current) return;
+      if (next.live && next.rows.length > 0) {
+        setRowsAll(next.rows);
+        setLive(true);
+        setReadAt(next.readAt ? displayTime(next.readAt) : "just now");
+        setFeedNote("Live sheet. Refreshes every 15 seconds.");
+        return;
+      }
+      setLive(false);
+      setFeedNote("Sheet copy.");
+    } catch {
+      if (!alive.current) return;
+      setLive(false);
+      setFeedNote("Sheet copy.");
+    } finally {
+      if (manual && alive.current) setRefreshing(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    alive.current = true;
+    void pull(false);
+    const timer = window.setInterval(() => {
+      void pull(false);
+    }, 15000);
+    return () => {
+      alive.current = false;
+      window.clearInterval(timer);
+    };
+  }, [pull]);
+
+  const starts = useMemo(() => runStarts(rowsAll), [rowsAll]);
+  const newest = starts[starts.length - 1];
+  const claytonStart = useMemo(() => {
+    const clayton = rowsAll.find(
+      (row) => row.county === "CLAYTON-GA" && /clayton-(rerun|e2e)/i.test(row.handoffId),
+    );
+    if (!clayton) return null;
+    const id = runId(rowsAll, clayton);
+    return starts.find((start) => start.id === id) ?? null;
+  }, [rowsAll, starts]);
+  const timeActive = time === "all" ? "all" : starts.some((start) => start.id === time) ? time : claytonStart?.id ?? newest?.id ?? "all";
 
   const rows = useMemo(() => {
-    return SNAPSHOT_ROWS.filter((row) => {
+    return rowsAll.filter((row) => {
       if (county !== "all" && row.county !== county) return false;
-      if (time !== "all" && row.time !== time) return false;
+      if (timeActive !== "all" && runId(rowsAll, row) !== timeActive) return false;
       return true;
     });
-  }, [county, time]);
+  }, [rowsAll, county, timeActive]);
 
   const steps = stepCoverage(rows);
   const metrics = useMemo(() => metricBoard(rows, null), [rows]);
+  const health = useMemo(() => computeHealth(rows), [rows]);
+  const progress = useMemo(
+    () =>
+      runProgress(
+        county === "all" || county === "CLAYTON-GA"
+          ? rowsAll.filter((row) => timeActive === "all" || runId(rowsAll, row) === timeActive)
+          : rows,
+      ),
+    [county, rows, rowsAll, timeActive],
+  );
   const stepAttention = steps.filter((step) => step.status === "look" || step.status === "wrong");
   const metricWrong = metrics.filter((metric) => metric.status === "wrong");
   const metricLook = metrics.filter((metric) => metric.status === "look");
   const headline =
-    tab === "steps"
+    progress && tab === "steps"
+      ? `Clayton re-run is on ${progress.nowLabel}.`
+      : tab === "steps"
       ? stepAttention.length === 0
         ? "Nothing needs you."
         : stepAttention.length === 1
@@ -74,18 +143,29 @@ export function Dashboard() {
   }
 
   return (
-    <main className={`mx-auto flex w-full flex-col gap-5 px-4 py-6 sm:px-6 sm:py-8 ${tab === "metrics" ? "max-w-3xl" : "max-w-2xl"}`}>
+    <main className={`mx-auto flex w-full flex-col gap-5 px-4 py-6 sm:px-6 sm:py-8 ${tab === "metrics" ? "max-w-5xl" : "max-w-2xl"}`}>
       <header className="flex flex-col gap-4">
         <div className="flex items-start justify-between gap-3">
           <div>
             <h1 className="font-display text-3xl text-fg">Workforce Observability</h1>
             <p className="mt-1 text-base text-fg">{headline}</p>
-            <p className="mt-1 text-xs text-faint">
-              Sheet copy, {SHEET_COPY.readAt}. {SHEET_COPY.rows} rows. Not a live feed.
-            </p>
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <p className="text-xs text-faint">
+                {live ? "Live" : "Saved"} · {readAt} · {rowsAll.length} rows. {feedNote}
+              </p>
+              <button
+                type="button"
+                onClick={() => void pull(true)}
+                disabled={refreshing}
+                className="min-h-11 rounded-full border border-line bg-panel px-3 text-sm font-medium text-fg disabled:text-faint"
+              >
+                {refreshing ? "Refreshing" : "Refresh"}
+              </button>
+            </div>
           </div>
           <ThemeSwitch />
         </div>
+        {progress && <RunBar progress={progress} />}
         <div role="tablist" aria-label="View" className="flex w-fit rounded-full border border-line bg-panel p-1">
           <TabButton active={tab === "steps"} onClick={() => setTab("steps")}>
             Steps
@@ -97,17 +177,17 @@ export function Dashboard() {
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <Filter label="County" value={county} onChange={setCounty}>
             <option value="all">All counties</option>
-            {counties(SNAPSHOT_ROWS).map((name) => (
+            {counties(rowsAll).map((name) => (
               <option key={name} value={name}>
                 {name}
               </option>
             ))}
           </Filter>
-          <Filter label="Time" value={time} onChange={setTime}>
+          <Filter label="Time" value={timeActive} onChange={setTime}>
             <option value="all">All times</option>
-            {times(SNAPSHOT_ROWS).map((stamp) => (
-              <option key={stamp} value={stamp}>
-                {stamp}
+            {starts.map((stamp) => (
+              <option key={stamp.id} value={stamp.id}>
+                {stamp.label}
               </option>
             ))}
           </Filter>
@@ -142,9 +222,9 @@ export function Dashboard() {
                 <div className="px-4 pb-3 pl-9">
                   {step.reason && <p className="text-sm leading-relaxed text-muted">{step.reason}</p>}
                   <p className="mt-1 flex flex-wrap gap-x-3 gap-y-1">
-                    {step.traceIds.map((id) => (
+                    {step.traceIds.map((id, index) => (
                       <button
-                        key={id}
+                        key={`${id}-${index}`}
                         type="button"
                         onClick={() => copyTrace(id)}
                         className="break-all text-left font-mono text-xs text-faint underline decoration-line underline-offset-2"
@@ -169,7 +249,11 @@ export function Dashboard() {
         })}
       </ol>
       ) : (
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <div className="flex flex-col gap-6">
+          <HealthView health={health} />
+          <section className="flex flex-col gap-3">
+            <h2 className="text-sm text-muted">Drift</h2>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           {metrics.map((metric) => {
             const shown = open === metric.id || pinned === metric.id;
             return (
@@ -195,9 +279,9 @@ export function Dashboard() {
                 </button>
                 {metric.traceIds.length > 0 && (
                   <p className="flex flex-wrap gap-x-3 gap-y-1 px-4 pb-4">
-                    {metric.traceIds.map((id) => (
+                    {metric.traceIds.map((id, index) => (
                       <button
-                        key={id}
+                        key={`${id}-${index}`}
                         type="button"
                         onClick={() => copyTrace(id)}
                         className="break-all text-left font-mono text-xs text-faint underline decoration-line underline-offset-2"
@@ -219,9 +303,191 @@ export function Dashboard() {
               </article>
             );
           })}
+            </div>
+          </section>
         </div>
       )}
     </main>
+  );
+}
+
+function HealthView({ health }: { health: Health }) {
+  const pct = (value: number) => `${Math.round(value * 100)}%`;
+  const rateTone = (value: number, target: number) => (value >= target ? "text-ok" : "text-bad");
+  const confText =
+    health.meanConfidence == null
+      ? "—"
+      : pct(health.meanConfidence);
+  const confRange =
+    health.confMin == null || health.confMax == null
+      ? "No confidence logged"
+      : `${health.confMin.toFixed(2)}–${health.confMax.toFixed(2)}`;
+
+  return (
+    <div className="flex flex-col gap-4">
+      <p className="text-sm text-muted">
+        {health.eventCount} events · Latest {health.latest || "—"} · {health.county}
+      </p>
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+        <Score
+          label="Schema integrity"
+          figure={pct(health.schemaRate)}
+          detail={`${health.schemaValid} of ${health.eventCount} complete`}
+          target="Target 90%"
+          toneClass={rateTone(health.schemaRate, TARGETS.schema)}
+          tip="Share of handoffs that arrived with a complete schema. Under 90%, a later step is working from a hole."
+        />
+        <Score
+          label="Autonomy"
+          figure={pct(health.autonomyRate)}
+          detail={`${health.autoCount} auto · ${health.humanCount} asked a person`}
+          target="Target 80%"
+          toneClass={rateTone(health.autonomyRate, TARGETS.autonomy)}
+          tip="Share of rows that finished without asking a person. Under 80%, the run is leaning on you."
+        />
+        <Score
+          label="Confidence"
+          figure={confText}
+          detail={confRange}
+          target="Target 80%"
+          toneClass={health.meanConfidence == null ? "text-faint" : rateTone(health.meanConfidence, TARGETS.confidence)}
+          tip="Average self-reported confidence on the rows in this filter. Under 80% is a weak read."
+        />
+        <Score
+          label="Avg tokens"
+          figure={health.avgTokens == null ? "—" : String(health.avgTokens)}
+          detail={`${health.totalTokens.toLocaleString()} total`}
+          target="Estimate"
+          toneClass="text-fg"
+          tip="Mean of the token estimates on these rows. The sheet does not store exact token counts."
+        />
+        <Score
+          label="Audit rate"
+          figure={pct(health.auditRate)}
+          detail={`${health.hashCount} of ${health.eventCount} have a content hash`}
+          target="Target 90%"
+          toneClass={rateTone(health.auditRate, TARGETS.audit)}
+          tip="Share of rows that carry a content hash. Under 90%, most handoffs cannot be checked later."
+        />
+      </div>
+      <section>
+        <h2 className="mb-2 text-sm text-muted">Channels</h2>
+        {health.channels.length === 0 ? (
+          <p className="text-sm text-muted">No handoffs in this filter.</p>
+        ) : (
+          <div className="overflow-x-auto rounded-card border border-line bg-panel">
+            <table className="w-full min-w-[36rem] text-left text-sm">
+              <thead className="text-muted">
+                <tr>
+                  <th className="px-3 py-2 font-medium">From</th>
+                  <th className="px-3 py-2 font-medium">To</th>
+                  <th className="px-3 py-2 font-medium">Handoffs</th>
+                  <th className="px-3 py-2 font-medium">Fails</th>
+                  <th className="px-3 py-2 font-medium">Pass</th>
+                  <th className="px-3 py-2 font-medium">Asked</th>
+                </tr>
+              </thead>
+              <tbody>
+                {health.channels.map((channel) => (
+                  <tr key={`${channel.from}-${channel.to}`} className="border-t border-line">
+                    <td className="px-3 py-2">{channel.from}</td>
+                    <td className="px-3 py-2">{channel.to}</td>
+                    <td className="px-3 py-2">{channel.handoffs}</td>
+                    <td className="px-3 py-2">{channel.fails}</td>
+                    <td className={`px-3 py-2 ${rateTone(channel.passRate, TARGETS.schema)}`}>{pct(channel.passRate)}</td>
+                    <td className="px-3 py-2">{pct(channel.intervention)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+      <section>
+        <h2 className="mb-2 text-sm text-muted">Steps</h2>
+        {health.steps.length === 0 ? (
+          <p className="text-sm text-muted">No steps in this filter.</p>
+        ) : (
+          <div className="overflow-x-auto rounded-card border border-line bg-panel">
+            <table className="w-full min-w-[40rem] text-left text-sm">
+              <thead className="text-muted">
+                <tr>
+                  <th className="px-3 py-2 font-medium">Step</th>
+                  <th className="px-3 py-2 font-medium">Phase</th>
+                  <th className="px-3 py-2 font-medium">Runs</th>
+                  <th className="px-3 py-2 font-medium">Pass</th>
+                  <th className="px-3 py-2 font-medium">Tokens</th>
+                  <th className="px-3 py-2 font-medium">Flags</th>
+                </tr>
+              </thead>
+              <tbody>
+                {health.steps.map((step) => (
+                  <tr key={step.step} className="border-t border-line">
+                    <td className="px-3 py-2">{step.label}</td>
+                    <td className="px-3 py-2 text-muted">{step.phase}</td>
+                    <td className="px-3 py-2">{step.executions}</td>
+                    <td className={`px-3 py-2 ${rateTone(step.passRate, TARGETS.schema)}`}>{pct(step.passRate)}</td>
+                    <td className="px-3 py-2">{step.avgTokens}</td>
+                    <td className="px-3 py-2">{step.flags}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}
+
+function Score({
+  label,
+  figure,
+  detail,
+  target,
+  toneClass,
+  tip,
+}: {
+  label: string;
+  figure: string;
+  detail: string;
+  target: string;
+  toneClass: string;
+  tip: string;
+}) {
+  return (
+    <div className="rounded-card border border-line bg-panel px-3 py-3" title={tip}>
+      <p className="text-xs text-muted">{label}</p>
+      <p className={`font-display text-2xl ${toneClass}`}>{figure}</p>
+      <p className="text-xs leading-relaxed text-muted">{detail}</p>
+      <p className="text-xs text-faint">{target}</p>
+    </div>
+  );
+}
+
+function RunBar({ progress }: { progress: RunProgress }) {
+  return (
+    <section aria-label="Clayton re-run progress" className="rounded-card border border-line bg-panel px-4 py-4">
+      <div className="flex items-baseline justify-between gap-3">
+        <p className="text-sm text-muted">Clayton re-run</p>
+        <p className="text-sm font-medium text-fg">
+          {progress.done} of {progress.total}
+        </p>
+      </div>
+      <p className="mt-1 text-lg text-fg">Now: {progress.nowLabel}</p>
+      <p className="mt-1 text-sm leading-relaxed text-muted">{progress.nowNote}</p>
+      <ol className="mt-3 flex gap-1" aria-label={`${progress.done} of ${progress.total} stages logged`}>
+        {progress.stages.map((stage) => (
+          <li
+            key={stage.id}
+            title={stage.label}
+            className={`h-2 flex-1 rounded-full ${
+              stage.state === "now" ? "bg-watch" : stage.state === "done" ? "bg-ok" : "bg-line"
+            }`}
+          />
+        ))}
+      </ol>
+    </section>
   );
 }
 
@@ -248,7 +514,7 @@ function TabButton({
 }
 
 function ThemeSwitch() {
-  const [theme, setTheme] = useState<Theme>("dark");
+  const [theme, setTheme] = useState<Theme>("lite");
 
   useEffect(() => {
     const stored = document.documentElement.dataset.theme;
@@ -262,12 +528,12 @@ function ThemeSwitch() {
   }
 
   return (
-    <div className="flex shrink-0 rounded-full border border-line bg-panel p-1" role="group" aria-label="Color mode">
-      <ModeButton active={theme === "lite"} onClick={() => choose("lite")}>
-        Lite
+    <div className="flex shrink-0 rounded-full border border-line bg-panel p-0.5" role="group" aria-label="Color mode">
+      <ModeButton active={theme === "lite"} label="Lite" onClick={() => choose("lite")}>
+        <Sun className="size-3.5" strokeWidth={2} aria-hidden="true" />
       </ModeButton>
-      <ModeButton active={theme === "dark"} onClick={() => choose("dark")}>
-        Dark
+      <ModeButton active={theme === "dark"} label="Dark" onClick={() => choose("dark")}>
+        <Moon className="size-3.5" strokeWidth={2} aria-hidden="true" />
       </ModeButton>
     </div>
   );
@@ -276,22 +542,31 @@ function ThemeSwitch() {
 function ModeButton({
   active,
   onClick,
+  label,
   children,
 }: {
   active: boolean;
   onClick: () => void;
+  label: string;
   children: ReactNode;
 }) {
   return (
     <button
       type="button"
       aria-pressed={active}
+      aria-label={label}
       onClick={onClick}
-      className={`min-h-11 rounded-full px-3 text-sm font-medium ${
+      className={`group relative grid size-7 place-items-center rounded-full ${
         active ? "bg-fg text-ink" : "text-muted"
       }`}
     >
       {children}
+      <span
+        role="tooltip"
+        className="pointer-events-none absolute top-full left-1/2 z-30 mt-1 -translate-x-1/2 rounded border border-line bg-ink px-1.5 py-0.5 text-[11px] leading-none whitespace-nowrap text-fg opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100"
+      >
+        {label}
+      </span>
     </button>
   );
 }

@@ -15,7 +15,7 @@ export const Route = createRootRoute({
         name: "description",
         content: "Step status for the county workforce. Cite a trace id. No personal details.",
       },
-      { name: "theme-color", content: "#101618" },
+      { name: "theme-color", content: "#f3f6f7" },
     ],
     links: [
       { rel: "icon", type: "image/svg+xml", href: "/favicon.svg" },
@@ -29,12 +29,12 @@ export const Route = createRootRoute({
     ],
   }),
   component: () => (
-    <html lang="en" suppressHydrationWarning>
+    <html lang="en" data-theme="lite" suppressHydrationWarning>
       <head>
         <script
           dangerouslySetInnerHTML={{
             __html:
-              "try{var t=localStorage.getItem('workforce-theme');if(t==='lite'||t==='dark')document.documentElement.dataset.theme=t;}catch(e){}",
+              "try{var t=localStorage.getItem('workforce-theme');document.documentElement.dataset.theme=t==='dark'?'dark':'lite';}catch(e){}",
           }}
         />
         <HeadContent />

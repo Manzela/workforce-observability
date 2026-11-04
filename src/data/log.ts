@@ -21,6 +21,10 @@ export type LogRow = {
   rejected: string;
   tokenEst: number | null;
   latencyMs: number | null;
+  /** Original sheet timestamp. Used to order a live run. Absent on the old 7-row fixture. */
+  iso?: string;
+  /** Sheet run_id. Empty on older rows; the run is then inferred. */
+  loggedRunId?: string;
 };
 
 /** Columns present on Envoy_Acquisition_Observability_Log when copied on 2 Nov 2026. */

@@ -112,7 +112,7 @@ export function metricBoard(rows: LogRow[], backup: Backup): MetricView[] {
     schemaStatus,
     schemaStatus === "clear" ? "Clear" : schemaStatus === "wrong" ? "Wrong" : "Look",
     `${of(marked, n)} are marked complete. ${ABSENT_COLUMNS.join(" and ")} are not columns on this sheet, so they were not counted.`,
-    "This is the share of rows marked schema_complete. A complete block is what a later check leans on. Below 95% the mark itself is failing. This sheet has no critical_claims or canonical_constraint column, so a true mark is not proof those fields arrived.",
+    "How many rows arrived complete. Under 95%, a later step is leaning on a hole. This sheet doesn't store the claim text, so complete isn't proof the claim arrived.",
     rows.filter((row) => !row.schemaComplete).map((row) => row.id),
   );
 
@@ -130,7 +130,7 @@ export function metricBoard(rows: LogRow[], backup: Backup): MetricView[] {
     reverifyStatus,
     reverifyStatus === "clear" ? "Clear" : reverifyStatus === "wrong" ? "Wrong" : "Look",
     `${of(checked.length, n)} ${checked.length === 1 ? "names" : "name"} a result. ${na.length} ${na.length === 1 ? "says" : "say"} not applicable. ${empty.length} ${empty.length === 1 ? "is" : "are"} empty. ${mismatch.length} ${mismatch.length === 1 ? "says" : "say"} mismatch. ${split.length} ${split.length === 1 ? "note claims" : "notes claim"} a re-check while the cell is empty.`,
-    "This is whether the receiver wrote a re-check of a named fact, and whether that cell says it matched. A perfect schema still lets a wrong number through if this cell is empty. A note that claims a re-check does not count unless the cell is filled.",
+    "How many rows say a named fact was checked again. An empty cell means it wasn't, even if the note says it was.",
     [...new Set([...mismatch, ...empty, ...split.map((row) => ({ row }))].map((item) => item.row.id))],
   );
 
@@ -151,7 +151,7 @@ export function metricBoard(rows: LogRow[], backup: Backup): MetricView[] {
     "look",
     "Look",
     `${of(withContent.length, n)} have a content hash. ${of(withConstraint.length, n)} have a constraint hash. ${agreed.length} notes match their content-hash cell. ${namedOnly.length} ${namedOnly.length === 1 ? "note names" : "notes name"} a hash the cell does not have. ${disagreed.length} ${disagreed.length === 1 ? "cell disagrees" : "cells disagree"} with the note. No second computed hash is stored, so the rest cannot be matched.`,
-    "This should be the share of rows whose content hash equals the hash of the rules and claims the sender used. The sheet stores one content hash and one constraint hash. They are not the same thing, so they are not compared to each other. A hash named only in the notes does not fill the cell.",
+    "How many notes repeat the same hash as the cell. The sheet stores one hash, not a second copy, so most rows can't be matched.",
     [...namedOnly, ...disagreed].map((item) => item.row.id),
   );
 
@@ -163,7 +163,7 @@ export function metricBoard(rows: LogRow[], backup: Backup): MetricView[] {
     asked.length > 0 ? "look" : "clear",
     asked.length > 0 ? "Look" : "Clear",
     `${of(asked.length, n)} asked a person. This sheet has one day, so a spike cannot be seen.`,
-    "This is how often a row waited for a person before it continued. A high rate means the bots were unsure. One day cannot show a spike.",
+    "How often a row waited for a person. A high number means the bots weren't sure.",
     asked.map((row) => row.id),
   );
 
@@ -176,7 +176,7 @@ export function metricBoard(rows: LogRow[], backup: Backup): MetricView[] {
     stopped.length > 0 ? "look" : "clear",
     stopped.length > 0 ? "Look" : "Clear",
     `${stopped.length} ${stopped.length === 1 ? "stop" : "stops"}. ${criticFlags.length} critic ${criticFlags.length === 1 ? "flag is" : "flags are"} not counted as a stop.`,
-    "A stop is a cascade flag other than none, or a row marked schema_complete false. Those are the handoffs the gate held. A critic flag is a warning, not a stop, and it is counted apart so it is not hidden.",
+    "Rows the gate held: a stop, or a row marked incomplete. A critic flag is a warning, not a stop.",
     [...new Set([...stopped, ...criticFlags].map((row) => row.id))],
   );
 
@@ -189,7 +189,7 @@ export function metricBoard(rows: LogRow[], backup: Backup): MetricView[] {
       "wrong",
       "Wrong",
       "The backup file is not in this workspace. These rows were not compared.",
-      "Each row should exist in the sheet and in the backup file. The backup is the copy that survives a failed sheet write. The file was not here, so a missing or different row would go unseen.",
+      "The same row should be in the sheet and the backup. The backup isn't here, so a missed write wouldn't show.",
       [],
     );
   } else {
@@ -207,7 +207,7 @@ export function metricBoard(rows: LogRow[], backup: Backup): MetricView[] {
       same
         ? `${sheetIds.size} row ids match the backup.`
         : `${missing.length} sheet ${missing.length === 1 ? "row is" : "rows are"} missing from the backup. ${extra.length} backup ${extra.length === 1 ? "row is" : "rows are"} not in this filter.`,
-      "The same row id should be in the sheet copy and the backup. Equal counts are not enough. The ids have to be the same ids.",
+      "The same row id should be in the sheet and the backup. Matching counts isn't enough.",
       missing,
     );
   }
@@ -225,7 +225,7 @@ export function metricBoard(rows: LogRow[], backup: Backup): MetricView[] {
     null,
     "Estimate",
     `Estimate. Tokens ${tokenSpan}. Time ${timeSpan}. ${tokenBlank} token ${tokenBlank === 1 ? "cell is" : "cells are"} blank. ${timeBlank} time ${timeBlank === 1 ? "cell is" : "cells are"} blank. A blank is not zero.`,
-    "token_est is about a quarter of the characters. latency_ms is the logged wait. The platform does not give exact tokens, so these stay estimates. They are here to notice a jump, not to price the work.",
+    "Rough size and wait. Tokens are a guess from the text, and a blank cell is not zero. Use this to spot a jump, not to price the work.",
     rows.filter((row) => row.tokenEst === null || row.latencyMs === null).map((row) => row.id),
   );
 
@@ -262,7 +262,7 @@ export function metricBoard(rows: LogRow[], backup: Backup): MetricView[] {
     confidenceStatus,
     confidenceStatus === "clear" ? "Clear" : "Look",
     `${lowText} ${numericRejected.length} rows give a count of discarded approaches, totaling ${discarded}. ${wordBit} ${blankRejected.length} ${blankRejected.length === 1 ? "is" : "are"} blank. A word is not zero.`,
-    "Confidence is the sender's own 0–1 score. Rejected approaches is how many paths it says it already dropped. A word such as none is not a number, so it is not treated as zero. Low confidence, or a count that is not a count, is the early warning.",
+    "The sender's own score, from 0 to 1, and how many approaches it says it dropped. A word like none is not a count.",
     [...missingConfidence, ...wordRejected, ...blankRejected, ...low].map((row) => row.id),
   );
 
